@@ -1683,7 +1683,7 @@ static int ODS_read_response(char *buf, int len)
       close(client_sockfd);
       return(-1);
     }
-    if(strspn(p, "\r\n") > 0)
+    if(strstr(buf, "\r\n") > 0)
     {
       break;
     }
