@@ -9,6 +9,7 @@
 #undef HAVE_GETPASS
 #undef HAVE_SYS_ERRLIST
 #undef OS
+#undef DEF_SERVICE
 
 /* Define if you have the gethostbyaddr function.  */
 #undef HAVE_GETHOSTBYADDR
