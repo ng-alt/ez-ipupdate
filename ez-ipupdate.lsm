@@ -5,7 +5,7 @@ Entered-date:
 Description:    A client for automaticly updating your EZ-IP.net dynamic
 		hostname perameters. Includes daemon support that only sends
                 updates if your IP address changes.
-Keywords:       EZ-IP, dynamic, hostname
+Keywords:       EZ-IP, dynamic, hostname, DNS
 Author:         amackay@gus.ml.org (Angus Mackay)
 Maintained-by:  amackay@gus.ml.org (Angus Mackay)
 Primary-site:   http://www.gus.ml.org/proj/ez-ipupdate/

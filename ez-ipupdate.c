@@ -1,5 +1,5 @@
 /* ============================================================================
- * Copyright (C) 1998 Angus Mackay. All rights reserved; 
+ * Copyright (C) 1999 Angus Mackay. All rights reserved; 
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -36,8 +36,16 @@
 
 #define DEFAULT_SERVER "www.EZ-IP.Net"
 #define DEFAULT_PORT "80"
-#define PERFERRED_REQUEST "/members/preferred/update/"
 #define REQUEST "/members/update/"
+#define DEFAULT_TIMEOUT 120
+#define DEFAULT_UPDATE_PERIOD 1800
+#if __linux__
+#  define DEFAULT_IF "eth0"
+#elif __OpenBSD__
+#  define DEFAULT_IF "ne0"
+#else
+#  define DEFAULT_IF "eth0"
+#endif
 
 #define BUFFER_SIZE 2048
 
@@ -73,12 +81,34 @@
 #if HAVE_SYSLOG_H
 #  include <syslog.h>
 #endif
+#if HAVE_STRERROR
+extern int errno;
+#  define error_string strerror(errno)
+#elif HAVE_SYS_ERRLIST
+extern const char *const sys_errlist[];
+extern int errno;
+#  define error_string (sys_errlist[errno])
+#else
+#  define error_string "error message not found"
+#endif
+#if HAVE_PWD_H && HAVE_GRP_H
+#  include <pwd.h>
+#  include <grp.h>
+#endif
+
+
 
 #if __linux__
 #  define IF_LOOKUP 1
 #  include <sys/ioctl.h>
 #  include <net/if.h>
+#elif __OpenBSD__
+#  define IF_LOOKUP 1
+#  include <sys/ioctl.h>
+#  include <net/if.h>
 #endif
+
+#include <conf_file.h>
 
 #if !defined(__GNUC__) && !defined(HAVE_SNPRINTF)
 #error "get gcc, fix this code, or find yourself a snprintf!"
@@ -111,6 +141,7 @@
 /**************************************************/
 
 static char *program_name = NULL;
+static char *config_file = NULL;
 static char *server = NULL;
 static char *port = NULL;
 static char user[256];
@@ -123,17 +154,60 @@ static char *url = NULL;
 static char *host = NULL;
 static char *interface = NULL;
 static int ntrys = 1;
-static int update_peroid = 600;
+static int update_period = DEFAULT_UPDATE_PERIOD;
+static struct timeval timeout;
 
 static volatile int client_sockfd;
+static volatile int last_sig = 0;
 
-static int options;
+int options;
 
 #define OPT_DEBUG       0x0001
-#define OPT_PERFERRED   0x0002
 #define OPT_DAEMON      0x0004
 #define OPT_QUIET       0x0008
 #define OPT_FOREGROUND  0x0010
+
+enum { 
+  CMD__start = 1,
+  CMD_server,
+  CMD_user,
+  CMD_address,
+  CMD_wildcard,
+  CMD_mx,
+  CMD_url,
+  CMD_host,
+  CMD_interface,
+  CMD_retrys,
+  CMD_period,
+  CMD_daemon,
+  CMD_debug,
+  CMD_foreground,
+  CMD_quiet,
+  CMD_timeout,
+  CMD_run_as_user,
+  CMD__end
+};
+
+int conf_handler(struct conf_cmd *cmd, char *arg);
+static struct conf_cmd conf_commands[] = {
+  { CMD_address,       "address",       CONF_NEED_ARG, 1, conf_handler, "%s=<ip address>" },
+  { CMD_daemon,        "daemon",        CONF_NO_ARG,   1, conf_handler, "%s" },
+  { CMD_debug,         "debug",         CONF_NO_ARG,   1, conf_handler, "%s" },
+  { CMD_foreground,    "foreground",    CONF_NO_ARG,   1, conf_handler, "%s" },
+  { CMD_host,          "host",          CONF_NEED_ARG, 1, conf_handler, "%s=<host>" },
+  { CMD_interface,     "interface",     CONF_NEED_ARG, 1, conf_handler, "%s=<interface>" },
+  { CMD_mx,            "mx",            CONF_NEED_ARG, 1, conf_handler, "%s=<mail exchanger>" },
+  { CMD_retrys,        "retrys",        CONF_NEED_ARG, 1, conf_handler, "%s=<number of trys>" },
+  { CMD_server,        "server",        CONF_NEED_ARG, 1, conf_handler, "%s=<server name>" },
+  { CMD_timeout,       "timeout",       CONF_NEED_ARG, 1, conf_handler, "%s=<sec.millisec>" },
+  { CMD_period,        "period",        CONF_NEED_ARG, 1, conf_handler, "%s=<time between update attempts>" },
+  { CMD_url,           "url",           CONF_NEED_ARG, 1, conf_handler, "%s=<url>" },
+  { CMD_user,          "user",          CONF_NEED_ARG, 1, conf_handler, "%s=<user name>[:password]" },
+  { CMD_run_as_user,   "run-as-user",   CONF_NEED_ARG, 1, conf_handler, "%s=<user>" },
+  { CMD_wildcard,      "wildcard",      CONF_NO_ARG,   1, conf_handler, "%s" },
+  { CMD_quiet,         "quiet",         CONF_NO_ARG,   1, conf_handler, "%s" },
+  { 0, 0, 0, 0, 0 }
+};
 
 /**************************************************/
 
@@ -152,18 +226,22 @@ void print_useage( void )
   fprintf(stdout, "%s [options] \n\n", program_name);
   fprintf(stdout, " Options are:\n");
   fprintf(stdout, "  -a, --address <ip address>\tstring to send as your ip address\n");
+  fprintf(stdout, "  -c, --config_file <file>\tconfiguration file, almost all arguments can be\n");
+  fprintf(stdout, "\t\t\t\tgiven with: <name>[=<value>]\n\t\t\t\tto see a list of possible config commands\n");
+  fprintf(stdout, "\t\t\t\ttry \"echo help | %s -c -\"\n", program_name);
   fprintf(stdout, "  -d, --daemon\t\t\trun as a daemon periodicly updating if necessary\n");
 #ifdef DEBUG
   fprintf(stdout, "  -D, --debug\t\t\tturn on debuggin\n");
 #endif
   fprintf(stdout, "  -f, --foreground\t\twhen running as a daemon run in the foreground\n");
   fprintf(stdout, "  -h, --host <host>\t\tstring to send as host parameter\n");
-  fprintf(stdout, "  -i, --interface <iface>\twhich interface to use, the default is eth0\n\t\t\t\tbut a common one to use would be ppp0\n");
+  fprintf(stdout, "  -i, --interface <iface>\twhich interface to use, the default is %s\n\t\t\t\tbut a common one to use would be ppp0\n", DEFAULT_IF);
   fprintf(stdout, "  -m, --mx <mail exchange>\tstring to send as your mail exchange\n");
-  fprintf(stdout, "  -p, --perferred\t\tconnect to the perferred members server\n");
-  fprintf(stdout, "  -P, --period <# of sec>\tperiod to check IP in daemon \n\t\t\t\tmode (default: 600s)\n");
+  fprintf(stdout, "  -P, --period <# of sec>\tperiod to check IP in daemon \n\t\t\t\tmode (default: 1800 seconds)\n");
   fprintf(stdout, "  -r, --retrys <num>\t\tnumber of trys (default: 1)\n");
+  fprintf(stdout, "  -R, --run-as-user <user>\tchange to <user> for running, be ware\n\t\t\t\tthat this can cause problems with handeling\n\t\t\t\tSIGHUP properly if that user can't read the\n\t\t\t\tconfig file\n");
   fprintf(stdout, "  -s, --server <server[:port]>\tthe server to connect to\n");
+  fprintf(stdout, "  -t, --timeout <sec.millisec>\tthe amount of time to wait on I/O\n");
   fprintf(stdout, "  -U, --url <url>\t\tstring to send as the url parameter\n");
   fprintf(stdout, "  -u, --user <user[:passwd]>\tuser ID and password, if either is left blank \n\t\t\t\tthey will be prompted for\n");
   fprintf(stdout, "  -w, --wildcard\t\tset your domain to have a wildcard alias\n");
@@ -175,7 +253,7 @@ void print_useage( void )
 
 void print_version( void )
 {
-  fprintf(stdout, "%s: - %s - $Id$\n", program_name, VERSION);
+  fprintf(stdout, "%s: - %s - $Id: ez-ipupdate.c,v 1.4 1999/04/21 03:12:26 amackay Exp $\n", program_name, VERSION);
 }
 
 void print_credits( void )
@@ -186,14 +264,169 @@ void print_credits( void )
 }
 
 #if HAVE_SIGNAL_H
-RETSIGTYPE sig_handler(int sig)
+RETSIGTYPE sigint_handler(int sig)
 {
   char message[] = "interupted.\n";
   close(client_sockfd);
   write(2, message, sizeof(message)-1);
   exit(0);
 }
+RETSIGTYPE generic_sig_handler(int sig)
+{
+  last_sig = sig;
+}
 #endif
+
+int option_handler(int id, char *optarg)
+{
+#if HAVE_PWD_H && HAVE_GRP_H
+  struct passwd *pw;
+#endif
+  char *tmp;
+  int i;
+
+  switch(id)
+  {
+    case CMD_address:
+      if(address) { free(address); }
+      address = strdup(optarg);
+      dprintf((stderr, "address: %s\n", address));
+      break;
+
+    case CMD_daemon:
+      options |= OPT_DAEMON;
+      dprintf((stderr, "daemon mode\n"));
+      break;
+
+    case CMD_debug:
+#ifdef DEBUG
+      options |= OPT_DEBUG;
+      dprintf((stderr, "debugging on\n"));
+#else
+      fprintf(stderr, "debugging was not enabled at compile time\n");
+#endif
+      break;
+
+    case CMD_foreground:
+      options |= OPT_FOREGROUND;
+      dprintf((stderr, "fork()ing off\n"));
+      break;
+
+    case CMD_host:
+      if(host) { free(host); }
+      host = strdup(optarg);
+      dprintf((stderr, "host: %s\n", host));
+      break;
+
+    case CMD_interface:
+      if(interface) { free(interface); }
+      interface = strdup(optarg);
+      dprintf((stderr, "interface: %s\n", interface));
+      break;
+
+    case CMD_mx:
+      if(mx) { free(mx); }
+      mx = strdup(optarg);
+      dprintf((stderr, "mx: %s\n", mx));
+      break;
+
+    case CMD_period:
+      update_period = atoi(optarg);
+      dprintf((stderr, "update_period: %d\n", update_period));
+      break;
+
+    case CMD_quiet:
+      options |= OPT_QUIET;
+      dprintf((stderr, "quiet mode\n"));
+      break;
+
+    case CMD_retrys:
+      ntrys = atoi(optarg);
+      dprintf((stderr, "ntrys: %d\n", ntrys));
+      break;
+
+    case CMD_server:
+      if(server) { free(server); }
+      server = strdup(optarg);
+      tmp = strchr(server, ':');
+      if(tmp)
+      {
+        *tmp++ = '\0';
+        if(port) { free(port); }
+        port = strdup(tmp);
+      }
+      dprintf((stderr, "server: %s\n", server));
+      dprintf((stderr, "port: %s\n", port));
+      break;
+
+    case CMD_user:
+      strncpy(user, optarg, sizeof(user));
+      user[sizeof(user)-1] = '\0';
+      dprintf((stderr, "user: %s\n", user));
+      tmp = strchr(optarg, ':');
+      if(tmp)
+      {
+        tmp++;
+        while(*tmp) { *tmp++ = '*'; }
+      }
+      break;
+
+    case CMD_run_as_user:
+#if HAVE_PWD_H && HAVE_GRP_H
+      if((pw=getpwnam(optarg)) == NULL)
+      {
+        i = atoi(optarg);
+      }
+      else
+      {
+        if(setgid(pw->pw_gid) != 0)
+        {
+          fprintf(stderr, "error changing group id\n");
+        }
+        dprintf((stderr, "GID now %d\n", pw->pw_gid));
+        i = pw->pw_uid;
+      }
+      if(setuid(i) != 0)
+      {
+        fprintf(stderr, "error changing user id\n");
+      }
+      dprintf((stderr, "UID now %d\n", i));
+#else
+      fprintf(stderr, "option \"daemon-user\" not supported on this system\n");
+#endif
+      break;
+
+    case CMD_url:
+      if(url) { free(url); }
+      url = strdup(optarg);
+      dprintf((stderr, "url: %s\n", url));
+      break;
+
+    case CMD_wildcard:
+      if(wildcard) { free(wildcard); }
+      wildcard = strdup("yes");
+      dprintf((stderr, "wildcard: %s\n", wildcard));
+      break;
+
+    case CMD_timeout:
+      timeout.tv_sec = atoi(optarg);
+      timeout.tv_usec = (atof(optarg) - timeout.tv_sec) * 1000000L;
+      dprintf((stderr, "timeout: %ld.%06ld\n", timeout.tv_sec, timeout.tv_usec));
+      break;
+
+    default:
+      dprintf((stderr, "case not handled: %d\n", id));
+      break;
+  }
+
+  return 0;
+}
+
+int conf_handler(struct conf_cmd *cmd, char *arg)
+{
+  return(option_handler(cmd->id, arg));
+}
+
 
 #ifdef HAVE_GETOPT_LONG
 #  define xgetopt( x1, x2, x3, x4, x5 ) getopt_long( x1, x2, x3, x4, x5 )
@@ -206,17 +439,19 @@ void parse_args( int argc, char **argv )
 #ifdef HAVE_GETOPT_LONG
   struct option long_options[] = {
       {"address",       required_argument,      0, 'a'},
+      {"config_file",   required_argument,      0, 'c'},
       {"daemon",        no_argument,            0, 'd'},
       {"debug",         no_argument,            0, 'D'},
       {"foreground",    no_argument,            0, 'f'},
       {"host",          required_argument,      0, 'h'},
       {"interface",     required_argument,      0, 'i'},
       {"mx",            required_argument,      0, 'm'},
-      {"perferred",     no_argument,            0, 'p'},
       {"period",        required_argument,      0, 'P'},
       {"quiet",         no_argument,            0, 'q'},
       {"retrys",        required_argument,      0, 'r'},
+      {"run-as-user",   required_argument,      0, 'R'},
       {"server",        required_argument,      0, 's'},
+      {"timeout",       required_argument,      0, 't'},
       {"url",           required_argument,      0, 'U'},
       {"user",          required_argument,      0, 'u'},
       {"wildcard",      no_argument,            0, 'w'},
@@ -229,111 +464,88 @@ void parse_args( int argc, char **argv )
 #  define long_options NULL
 #endif
   int opt;
-  char *tmp;
 
-  while((opt = xgetopt(argc, argv, "a:dDfh:i:m:pP:qr:s:U:u:wHVC", long_options, NULL)) != -1)
+  while((opt=xgetopt(argc, argv, "a:c:dDfh:i:m:P:qr:R:s:t:U:u:wHVC", 
+          long_options, NULL)) != -1)
   {
     switch (opt)
     {
       case 'a':
-        if(address) { free(address); }
-        address = strdup(optarg);
-        dprintf((stderr, "address: %s\n", address));
+        option_handler(CMD_address, optarg);
+        break;
+
+      case 'c':
+        if(config_file) { free(config_file); }
+        config_file = strdup(optarg);
+        dprintf((stderr, "config_file: %s\n", config_file));
+        if(config_file)
+        {
+          if(parse_conf_file(config_file, conf_commands) != 0)
+          {
+            fprintf(stderr, "error parsing config file \"%s\"\n", config_file);
+            exit(1);
+          }
+        }
         break;
 
       case 'd':
-        options |= OPT_DAEMON;
-        dprintf((stderr, "daemon mode\n"));
+        option_handler(CMD_daemon, optarg);
         break;
 
       case 'D':
-#ifdef DEBUG
-        options |= OPT_DEBUG;
-        dprintf((stderr, "debugging on\n"));
-#else
-        fprintf(stderr, "debugging was not enabled at compile time\n");
-#endif
+        option_handler(CMD_debug, optarg);
         break;
 
       case 'f':
-        options |= OPT_FOREGROUND;
-        dprintf((stderr, "fork()ing off\n"));
+        option_handler(CMD_foreground, optarg);
         break;
 
       case 'h':
-        if(host) { free(host); }
-        host = strdup(optarg);
-        dprintf((stderr, "host: %s\n", host));
+        option_handler(CMD_host, optarg);
         break;
 
       case 'i':
-        if(interface) { free(interface); }
-        interface = strdup(optarg);
-        dprintf((stderr, "interface: %s\n", interface));
+        option_handler(CMD_interface, optarg);
         break;
 
       case 'm':
-        if(mx) { free(mx); }
-        mx = strdup(optarg);
-        dprintf((stderr, "mx: %s\n", mx));
+        option_handler(CMD_mx, optarg);
         break;
 
       case 'P':
-        update_peroid = atoi(optarg);
-        dprintf((stderr, "update_peroid: %d\n", update_peroid));
-        break;
-
-      case 'p':
-        options |= OPT_PERFERRED;
-        dprintf((stderr, "perferred member\n"));
+        option_handler(CMD_period, optarg);
         break;
 
       case 'q':
-        options |= OPT_QUIET;
-        dprintf((stderr, "quiet mode\n"));
+        option_handler(CMD_quiet, optarg);
         break;
 
       case 'r':
-        ntrys = atoi(optarg);
-        dprintf((stderr, "ntrys: %d\n", ntrys));
+        option_handler(CMD_retrys, optarg);
+        break;
+
+      case 'R':
+        option_handler(CMD_run_as_user, optarg);
         break;
 
       case 's':
-        if(server) { free(server); }
-        server = strdup(optarg);
-        tmp = strchr(server, ':');
-        if(tmp)
-        {
-          *tmp++ = '\0';
-          if(port) { free(port); }
-          port = strdup(tmp);
-        }
-        dprintf((stderr, "server: %s\n", server));
-        dprintf((stderr, "port: %s\n", port));
+        option_handler(CMD_server, optarg);
+        break;
+
+      case 't':
+        option_handler(CMD_timeout, optarg);
         break;
 
       case 'u':
-        strncpy(user, optarg, sizeof(user));
-        user[sizeof(user)-1] = '\0';
-        dprintf((stderr, "user: %s\n", user));
-        tmp = strchr(optarg, ':');
-        if(tmp)
-        {
-          *tmp++;
-          while(*tmp) { *tmp++ = '*'; }
-        }
+        option_handler(CMD_user, optarg);
         break;
 
       case 'U':
-        if(url) { free(url); }
-        url = strdup(optarg);
-        dprintf((stderr, "url: %s\n", url));
+        option_handler(CMD_url, optarg);
         break;
 
       case 'w':
-        if(wildcard) { free(wildcard); }
-        wildcard = strdup("yes");
-        dprintf((stderr, "wildcard: %s\n", wildcard));
+        option_handler(CMD_wildcard, optarg);
         break;
 
       case 'H':
@@ -484,17 +696,93 @@ void base64Encode(char *intext, char *output)
 
 void output(void *buf)
 {
-  if(send(client_sockfd, buf, strlen(buf), 0) == -1)
+  fd_set writefds;
+  int max_fd;
+  struct timeval tv;
+  int ret;
+
+  // set up our fdset and timeout
+  FD_ZERO(&writefds);
+  FD_SET(client_sockfd, &writefds);
+  max_fd = client_sockfd;
+  memcpy(&tv, &timeout, sizeof(struct timeval));
+
+  ret = select(max_fd + 1, NULL, &writefds, NULL, &tv);
+  dprintf((stderr, "ret: %d\n", ret));
+
+  if(ret == -1)
   {
-    fprintf(stderr, "error send()ing request\n");
+    dprintf((stderr, "select: %s\n", error_string));
   }
+  else if(ret == 0)
+  {
+    fprintf(stderr, "timeout\n");
+  }
+  else
+  {
+    /* if we woke up on client_sockfd do the data passing */
+    if(FD_ISSET(client_sockfd, &writefds))
+    {
+      if(send(client_sockfd, buf, strlen(buf), 0) == -1)
+      {
+        fprintf(stderr, "error send()ing request\n");
+      }
+    }
+    else
+    {
+      dprintf((stderr, "error: case not handled."));
+    }
+  }
+}
+
+int read_input(void *buf, int len)
+{
+  fd_set readfds;
+  int max_fd;
+  struct timeval tv;
+  int ret;
+  int bread;
+
+  // set up our fdset and timeout
+  FD_ZERO(&readfds);
+  FD_SET(client_sockfd, &readfds);
+  max_fd = client_sockfd;
+  memcpy(&tv, &timeout, sizeof(struct timeval));
+
+  ret = select(max_fd + 1, &readfds, NULL, NULL, &tv);
+  dprintf((stderr, "ret: %d\n", ret));
+
+  if(ret == -1)
+  {
+    dprintf((stderr, "select: %s\n", error_string));
+  }
+  else if(ret == 0)
+  {
+    fprintf(stderr, "timeout\n");
+  }
+  else
+  {
+    /* if we woke up on client_sockfd do the data passing */
+    if(FD_ISSET(client_sockfd, &readfds))
+    {
+      if((bread=recv(client_sockfd, buf, len, 0)) == -1)
+      {
+        fprintf(stderr, "error send()ing request\n");
+      }
+    }
+    else
+    {
+      dprintf((stderr, "error: case not handled."));
+    }
+  }
+
+  return(bread);
 }
 
 #ifdef IF_LOOKUP
 int get_if_addr(int sock, char *name, struct sockaddr_in *sin)
 {
   struct ifreq ifr;
-  int i;
 
   memset(&ifr, 0, sizeof(ifr));
   strcpy(ifr.ifr_name, name);
@@ -575,13 +863,14 @@ int update_entry(void)
   bp = buf;
   bytes = 0;
   btot = 0;
-  while((bytes=recv(client_sockfd, bp, BUFFER_SIZE-btot, 0)) > 0)
+  while((bytes=read_input(bp, BUFFER_SIZE-btot)) > 0)
   {
     bp += bytes;
     btot += bytes;
     dprintf((stderr, "btot: %d\n", btot));
   }
   close(client_sockfd);
+  buf[btot] = '\0';
 
   dprintf((stderr, "server output: %s\n", buf));
 
@@ -631,6 +920,48 @@ int update_entry(void)
   return 0;
 }
 
+void handle_sig(int sig)
+{
+  switch(sig)
+  {
+    case SIGHUP:
+      if(config_file)
+      {
+#if HAVE_SYSLOG_H
+        syslog(LOG_NOTICE, "SIGHUP recieved, re-reading config file\n");
+#else
+        fprintf(stderr, "SIGHUP recieved, re-reading config file\n");
+#endif
+        if(parse_conf_file(config_file, conf_commands) != 0)
+        {
+#if HAVE_SYSLOG_H
+          syslog(LOG_NOTICE, "error parsing config file \"%s\"\n", config_file);
+#else
+          fprintf(stderr, "error parsing config file \"%s\"\n", config_file);
+#endif
+        }
+      }
+      break;
+    case SIGTERM:
+      /* 
+       * this is used to wake up the client so that it will perform an update 
+       */
+      break;
+    case SIGQUIT:
+#if HAVE_SYSLOG_H
+      syslog(LOG_NOTICE, "received SIGQUIT, shutting down\n");
+      closelog();
+      exit(0);
+#else
+      fprintf(stderr, "received SIGQUIT, shutting down\n");
+      exit(0);
+#endif
+    default:
+      dprintf((stderr, "case not handled: %d\n", sig));
+      break;
+  }
+}
+
 int main( int argc, char **argv )
 {
   char user_name[128];
@@ -638,7 +969,7 @@ int main( int argc, char **argv )
   int ifresolve_warned = 0;
   int i;
 #ifdef IF_LOOKUP
-  int sock;
+  int sock = -1;
   struct sockaddr_in sin;
   struct sockaddr_in sin2;
 #endif
@@ -648,17 +979,28 @@ int main( int argc, char **argv )
   program_name = argv[0];
   options = 0;
   *user = '\0';
+  timeout.tv_sec = DEFAULT_TIMEOUT;
+  timeout.tv_usec = 0;
 
 #if HAVE_SIGNAL_H
   // catch user interupts
-  signal(SIGINT, sig_handler);
+  signal(SIGINT,  sigint_handler);
+  signal(SIGHUP,  generic_sig_handler);
+  signal(SIGTERM, generic_sig_handler);
+  signal(SIGQUIT, generic_sig_handler);
 #endif
 
   parse_args(argc, argv);
 
+  if(!(options & OPT_QUIET) && !(options & OPT_DAEMON))
+  {
+    fprintf(stderr, "ez-ipupdate Version %s\nCopyright (C) 1999 Angus Mackay.\n", VERSION);
+  }
+
   dprintf((stderr, "options: 0x%04X\n", options));
   dprintf((stderr, "interface: %s\n", interface));
   dprintf((stderr, "ntrys: %d\n", ntrys));
+  dprintf((stderr, "server: %s:%s\n", server, port));
 
   dprintf((stderr, "address: %s\n", address));
   dprintf((stderr, "wildcard: %s\n", wildcard));
@@ -685,7 +1027,7 @@ int main( int argc, char **argv )
   *password = '\0';
   if(*user != '\0')
   {
-    sscanf(user, "%127[^:]:%127s", user_name, password);
+    sscanf(user, "%127[^:]:%127[^\n]", user_name, password);
     dprintf((stderr, "user_name: %s\n", user_name));
     dprintf((stderr, "password: %s\n", password));
   }
@@ -703,16 +1045,9 @@ int main( int argc, char **argv )
 
   base64Encode(user, auth);
 
-  if(options & OPT_PERFERRED)
-  {
-    request = strdup(PERFERRED_REQUEST);
-  }
-  else
-  {
-    request = strdup(REQUEST);
-  }
+  request = strdup(REQUEST);
 
-  if(interface == NULL) { interface = strdup("eth0"); }
+  if(interface == NULL) { interface = strdup(DEFAULT_IF); }
 
   if(address == NULL) { address = strdup(""); }
   if(wildcard == NULL) { wildcard = strdup("no"); }
@@ -722,8 +1057,6 @@ int main( int argc, char **argv )
 
   if(options & OPT_DAEMON)
   {
-    pid_t pid;
-
 #if IF_LOOKUP
     /* background our selves */
     if(!(options & OPT_FOREGROUND))
@@ -738,6 +1071,8 @@ int main( int argc, char **argv )
 
 #  if HAVE_SYSLOG_H
     openlog(program_name, LOG_PID, LOG_USER );
+    syslog(LOG_NOTICE, "ez-ipupdate Version %s, Copyright (C) 1999 Angus Mackay.\n", 
+        VERSION);
     syslog(LOG_NOTICE, "%s started for interface %s using server %s\n",
         program_name, interface, server);
     options |= OPT_QUIET;
@@ -746,6 +1081,14 @@ int main( int argc, char **argv )
 
     for(;;)
     {
+#if HAVE_SIGNAL_H
+      /* check for signals */
+      if(last_sig != 0)
+      {
+        handle_sig(last_sig);
+        last_sig = 0;
+      }
+#endif
       if(get_if_addr(sock, interface, &sin2) == 0)
       {
         ifresolve_warned = 0;
@@ -758,12 +1101,18 @@ int main( int argc, char **argv )
 #  if HAVE_SYSLOG_H
             syslog(LOG_NOTICE, "successful update for %s->%s\n",
                 interface, inet_ntoa(sin.sin_addr));
+#  else
+            fprintf(stderr, "successful update for %s->%s\n",
+                interface, inet_ntoa(sin.sin_addr));
 #  endif
           }
           else
           {
 #  if HAVE_SYSLOG_H
             syslog(LOG_NOTICE, "failure to update %s->%s\n",
+                interface, inet_ntoa(sin.sin_addr));
+#  else
+            fprintf(stderr, "failure to update %s->%s\n",
                 interface, inet_ntoa(sin.sin_addr));
 #  endif
             memset(&sin, 0, sizeof(sin));
@@ -772,16 +1121,19 @@ int main( int argc, char **argv )
       }
       else
       {
-#  if HAVE_SYSLOG_H
         if(!ifresolve_warned)
         {
           ifresolve_warned = 1;
+#  if HAVE_SYSLOG_H
           syslog(LOG_NOTICE, "unable to resolve interface %s\n",
               interface);
-        }
+#  else
+          fprintf(stderr, "unable to resolve interface %s\n",
+              interface);
 #  endif
+        }
       }
-      sleep(update_peroid);
+      sleep(update_period);
     }
 #else
     fprintf(stderr, "sorry, this mode is only available on platforms that the ");
@@ -802,6 +1154,17 @@ int main( int argc, char **argv )
     }
     return 1;
   }
+
+  if(address) { free(address); }
+  if(config_file) { free(config_file); }
+  if(host) { free(host); }
+  if(interface) { free(interface); }
+  if(mx) { free(mx); }
+  if(port) { free(port); }
+  if(request) { free(request); }
+  if(server) { free(server); }
+  if(url) { free(url); }
+  if(wildcard) { free(wildcard); }
 
   dprintf((stderr, "done\n"));
   return 0;

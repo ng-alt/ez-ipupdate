@@ -68,10 +68,10 @@ PACKAGE = @PACKAGE@
 VERSION = @VERSION@
 
 bin_PROGRAMS = ez-ipupdate
-ez_ipupdate_SOURCES = ez-ipupdate.c @EXTRASRC@
+ez_ipupdate_SOURCES = ez-ipupdate.c conf_file.c conf_file.h @EXTRASRC@
 ez_ipupdate_LDADD = @EXTRAOBJ@
 
-EXTRA_DIST = ez-ipupdate.lsm
+EXTRA_DIST = ez-ipupdate.lsm example.conf
 
 AUTOMAKE_OPTIONS=foreign
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
@@ -85,7 +85,7 @@ DEFS = @DEFS@ -I. -I$(srcdir) -I.
 CPPFLAGS = @CPPFLAGS@
 LDFLAGS = @LDFLAGS@
 LIBS = @LIBS@
-ez_ipupdate_OBJECTS =  ez-ipupdate.o
+ez_ipupdate_OBJECTS =  ez-ipupdate.o conf_file.o
 ez_ipupdate_DEPENDENCIES = 
 ez_ipupdate_LDFLAGS = 
 CFLAGS = @CFLAGS@
@@ -258,7 +258,8 @@ distdir: $(DISTFILES)
 	  || ln $$d/$$file $(distdir)/$$file 2> /dev/null \
 	  || cp -p $$d/$$file $(distdir)/$$file; \
 	done
-ez-ipupdate.o: ez-ipupdate.c config.h
+conf_file.o: conf_file.c config.h conf_file.h
+ez-ipupdate.o: ez-ipupdate.c config.h conf_file.h
 
 info:
 dvi:

@@ -7,6 +7,7 @@
 #undef VERSION
 #undef DEBUG
 #undef HAVE_GETPASS
+#undef HAVE_SYS_ERRLIST
 #undef OS
 
 /* Define if you have the gethostbyaddr function.  */
@@ -39,6 +40,9 @@
 /* Define if you have the strdup function.  */
 #undef HAVE_STRDUP
 
+/* Define if you have the strerror function.  */
+#undef HAVE_STRERROR
+
 /* Define if you have the <arpa/inet.h> header file.  */
 #undef HAVE_ARPA_INET_H
 
@@ -48,17 +52,26 @@
 /* Define if you have the <getopt.h> header file.  */
 #undef HAVE_GETOPT_H
 
+/* Define if you have the <grp.h> header file.  */
+#undef HAVE_GRP_H
+
 /* Define if you have the <netdb.h> header file.  */
 #undef HAVE_NETDB_H
 
 /* Define if you have the <netinet/in.h> header file.  */
 #undef HAVE_NETINET_IN_H
 
+/* Define if you have the <pwd.h> header file.  */
+#undef HAVE_PWD_H
+
 /* Define if you have the <signal.h> header file.  */
 #undef HAVE_SIGNAL_H
 
 /* Define if you have the <sys/socket.h> header file.  */
 #undef HAVE_SYS_SOCKET_H
+
+/* Define if you have the <sys/time.h> header file.  */
+#undef HAVE_SYS_TIME_H
 
 /* Define if you have the <sys/types.h> header file.  */
 #undef HAVE_SYS_TYPES_H
