@@ -1,5 +1,5 @@
 /* ============================================================================
- * Copyright (C) 1999 Angus Mackay. All rights reserved; 
+ * Copyright (C) 1998-2000 Angus Mackay. All rights reserved; 
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -34,6 +34,10 @@
  * 
  */
 
+#ifdef HAVE_CONFIG_H
+#  include <config.h>
+#endif
+
 #define EZIP_DEFAULT_SERVER "www.EZ-IP.Net"
 #define EZIP_DEFAULT_PORT "80"
 #define EZIP_REQUEST "/members/update/"
@@ -42,6 +46,11 @@
 #define PGPOW_DEFAULT_PORT "2345"
 #define PGPOW_REQUEST "update"
 #define PGPOW_VERSION "1.0"
+
+#define DHS_DEFAULT_SERVER "members.dhs.org"
+#define DHS_DEFAULT_PORT "80"
+#define DHS_REQUEST "/nic/hosts"
+#define DHS_SUCKY_TIMEOUT 60
 
 #define DEFAULT_TIMEOUT 120
 #define DEFAULT_UPDATE_PERIOD 600
@@ -53,10 +62,10 @@
 #  define DEFAULT_IF "eth0"
 #endif
 
-#define BUFFER_SIZE 2047
-
-#ifdef HAVE_CONFIG_H
-#  include <config.h>
+#ifdef DEBUG
+#  define BUFFER_SIZE (8*1024)
+#else
+#  define BUFFER_SIZE 1023
 #endif
 
 #ifdef HAVE_GETOPT_H
@@ -144,7 +153,8 @@ extern int errno;
 
 enum {
   SERV_EZIP,
-  SERV_PGPOW
+  SERV_PGPOW,
+  SERV_DHS
 };
 
 struct service_t
@@ -175,6 +185,7 @@ static char *wildcard = NULL;
 static char *mx = NULL;
 static char *url = NULL;
 static char *host = NULL;
+static char *cloak_title = NULL;
 static char *interface = NULL;
 static int ntrys = 1;
 static int update_period = DEFAULT_UPDATE_PERIOD;
@@ -213,6 +224,20 @@ static struct service_t PGPOW_service = {
   PGPOW_REQUEST
 };
 
+int DHS_update_entry(void);
+int DHS_check_info(void);
+static char *DHS_fields_used[] = { "server", "user", "address", "wildcard", "mx", "url", "host" };
+static struct service_t DHS_service = {
+  SERV_DHS,
+  "ez-ip",
+  DHS_update_entry,
+  DHS_check_info,
+  DHS_fields_used,
+  DHS_DEFAULT_SERVER,
+  DHS_DEFAULT_PORT,
+  DHS_REQUEST
+};
+
 /* default to EZIP for historical reasons */
 static struct service_t *service = &EZIP_service;
 
@@ -233,6 +258,7 @@ enum {
   CMD_mx,
   CMD_url,
   CMD_host,
+  CMD_cloak_title,
   CMD_interface,
   CMD_retrys,
   CMD_resolv_period,
@@ -249,6 +275,7 @@ enum {
 int conf_handler(struct conf_cmd *cmd, char *arg);
 static struct conf_cmd conf_commands[] = {
   { CMD_address,       "address",       CONF_NEED_ARG, 1, conf_handler, "%s=<ip address>" },
+  { CMD_cloak_title,   "cloak_title",   CONF_NEED_ARG, 1, conf_handler, "%s=<title>" },
   { CMD_daemon,        "daemon",        CONF_NO_ARG,   1, conf_handler, "%s" },
   { CMD_debug,         "debug",         CONF_NO_ARG,   1, conf_handler, "%s" },
   { CMD_foreground,    "foreground",    CONF_NO_ARG,   1, conf_handler, "%s" },
@@ -314,13 +341,13 @@ void print_useage( void )
 
 void print_version( void )
 {
-  fprintf(stdout, "%s: - %s - $Id: ez-ipupdate.c,v 1.6 1999/07/13 05:44:46 amackay Exp $\n", program_name, VERSION);
+  fprintf(stdout, "%s: - %s - $Id: ez-ipupdate.c,v 1.10 2000/03/17 09:15:06 amackay Exp $\n", program_name, VERSION);
 }
 
 void print_credits( void )
 {
   fprintf( stdout, "AUTHORS / CONTRIBUTORS\n"
-      "  Angus Mackay <amackay@gus.ml.org>\n"
+      "  Angus Mackay <amackay@gusnet.cx>\n"
       "\n" );
 }
 
@@ -434,6 +461,10 @@ int option_handler(int id, char *optarg)
       {
         service = &PGPOW_service;
       }
+      else if(strcmp("dhs", optarg) == 0)
+      {
+        service = &DHS_service;
+      }
       else
       {
         fprintf(stderr, "unknown service type: %s\n", optarg);
@@ -490,6 +521,12 @@ int option_handler(int id, char *optarg)
       dprintf((stderr, "wildcard: %s\n", wildcard));
       break;
 
+    case CMD_cloak_title:
+      if(cloak_title) { free(cloak_title); }
+      cloak_title = strdup(optarg);
+      dprintf((stderr, "cloak_title: %s\n", cloak_title));
+      break;
+
     case CMD_timeout:
       timeout.tv_sec = atoi(optarg);
       timeout.tv_usec = (atof(optarg) - timeout.tv_sec) * 1000000L;
@@ -522,12 +559,12 @@ void parse_args( int argc, char **argv )
   struct option long_options[] = {
       {"address",       required_argument,      0, 'a'},
       {"config_file",   required_argument,      0, 'c'},
-      {"config-file",   required_argument,      0, 'c'},
       {"daemon",        no_argument,            0, 'd'},
       {"debug",         no_argument,            0, 'D'},
       {"foreground",    no_argument,            0, 'f'},
       {"host",          required_argument,      0, 'h'},
       {"interface",     required_argument,      0, 'i'},
+      {"cloak_title",   required_argument,      0, 'L'},
       {"mx",            required_argument,      0, 'm'},
       {"resolv-period", required_argument,      0, 'p'},
       {"period",        required_argument,      0, 'P'},
@@ -550,7 +587,7 @@ void parse_args( int argc, char **argv )
 #endif
   int opt;
 
-  while((opt=xgetopt(argc, argv, "a:c:dDfh:i:m:p:P:qr:R:s:S:t:U:u:wHVC", 
+  while((opt=xgetopt(argc, argv, "a:c:dDfh:i:L:m:p:P:qr:R:s:S:t:U:u:wHVC", 
           long_options, NULL)) != -1)
   {
     switch (opt)
@@ -591,6 +628,10 @@ void parse_args( int argc, char **argv )
 
       case 'i':
         option_handler(CMD_interface, optarg);
+        break;
+
+      case 'L':
+        option_handler(CMD_cloak_title, optarg);
         break;
 
       case 'm':
@@ -913,6 +954,44 @@ int get_if_addr(int sock, char *name, struct sockaddr_in *sin)
 }
 #endif
 
+static int read_response(char *buf)
+{
+  int bytes; 
+
+  bytes = read_input(buf, BUFFER_SIZE);
+  if(bytes < 1)
+  {
+    close(client_sockfd);
+    return(-1);
+  }
+  buf[bytes] = '\0';
+
+  dprintf((stderr, "server says: %s\n", buf));
+  
+  if(strncmp("OK", buf, 2) != 0)
+  {
+    return(1);
+  }
+  else
+  {
+    return(0);
+  }
+}
+
+int PGPOW_check_info(void)
+{
+  char buf[BUFSIZ+1];
+
+  if(host == NULL)
+  {
+    printf("host: ");
+    fgets(buf, BUFSIZ, stdin);
+    host = strdup(buf);
+  }
+
+  return 0;
+}
+
 int EZIP_check_info(void)
 {
   return 0;
@@ -1022,44 +1101,6 @@ int EZIP_update_entry(void)
   return 0;
 }
 
-static int read_response(char *buf)
-{
-  int bytes; 
-
-  bytes = read_input(buf, BUFFER_SIZE);
-  if(bytes < 1)
-  {
-    close(client_sockfd);
-    return(-1);
-  }
-  buf[bytes] = '\0';
-
-  dprintf((stderr, "server says: %s\n", buf));
-  
-  if(strncmp("OK", buf, 2) != 0)
-  {
-    return(1);
-  }
-  else
-  {
-    return(0);
-  }
-}
-
-int PGPOW_check_info(void)
-{
-  char buf[BUFSIZ+1];
-
-  if(host == NULL)
-  {
-    printf("host: ");
-    fgets(buf, BUFSIZ, stdin);
-    host = strdup(buf);
-  }
-
-  return 0;
-}
-
 int PGPOW_update_entry(void)
 {
   char buf[BUFFER_SIZE+1];
@@ -1092,6 +1133,7 @@ int PGPOW_update_entry(void)
         close(sock);
         return(-1);
       }
+      close(sock);
 #else
       printf("ip address: ");
       fgets(buf, BUFSIZ, stdin);
@@ -1257,6 +1299,366 @@ int PGPOW_update_entry(void)
   return 0;
 }
 
+int DHS_check_info(void)
+{
+  return 0;
+}
+
+/*
+ * grrrrr, it seems that dhs.org requires us to use POST
+ * also DHS doesn't update both the mx record and the address at the same
+ * time, this service really stinks. go with justlinix.com (penguinpowered)
+ * instead, the only advantage is short host names.
+ */
+int DHS_update_entry(void)
+{
+  char buf[BUFFER_SIZE+1];
+  char putbuf[BUFFER_SIZE+1];
+  char *bp = buf;
+  int bytes;
+  int btot;
+  int ret;
+  char *domain = NULL;
+  char *hostname = NULL;
+  char *p;
+  int limit;
+  int retval = 0;
+
+  buf[BUFFER_SIZE] = '\0';
+  putbuf[BUFFER_SIZE] = '\0';
+
+  // make sure that we can get our own ip address first
+  if(1)
+  {
+    if((options & OPT_DAEMON) || address == NULL || *address == '\0')
+    {
+#ifdef IF_LOOKUP
+      struct sockaddr_in sin;
+      int sock;
+#endif
+
+      if(address) { free(address); address = NULL; }
+
+#ifdef IF_LOOKUP
+      sock = socket(AF_INET, SOCK_STREAM, 0);
+      if(get_if_addr(sock, interface, &sin) == 0)
+      {
+        if(address) { free(address); }
+        address = strdup(inet_ntoa(sin.sin_addr)),
+        close(sock);
+      }
+      else
+      {
+        fprintf(stderr, "could not resolve ip address.\n");
+        close(sock);
+        return(-1);
+      }
+      close(sock);
+#else
+      printf("ip address: ");
+      fgets(buf, BUFSIZ, stdin);
+      address = strdup(buf);
+#endif
+    }
+  }
+
+
+  /* parse apart the domain and hostname */
+  hostname = strdup(host);
+  if((p=strchr(hostname, '.')) == NULL)
+  {
+    if(!(options & OPT_QUIET))
+    {
+      fprintf(stderr, "error parsing hostname from host %s\n", host);
+    }
+    return(-1);
+  }
+  *p = '\0';
+  p++;
+  if(*p == '\0')
+  {
+    if(!(options & OPT_QUIET))
+    {
+      fprintf(stderr, "error parsing domain from host %s\n", host);
+    }
+    return(-1);
+  }
+  domain = strdup(p);
+
+  dprintf((stderr, "hostname: %s, domain: %s\n", hostname, domain));
+
+  if(do_connect((int*)&client_sockfd, server, port) != 0)
+  {
+    if(!(options & OPT_QUIET))
+    {
+      fprintf(stderr, "error connecting to %s:%s\n", server, port);
+    }
+    close(client_sockfd);
+    return(-1);
+  }
+
+  snprint(buf, BUFFER_SIZE, "POST %s HTTP/1.0\015\012", request);
+  output(buf);
+  snprint(buf, BUFFER_SIZE, "Authorization: Basic %s\015\012", auth);
+  output(buf);
+  snprint(buf, BUFFER_SIZE, "User-Agent: %s-%s %s (%s)\015\012", 
+      "ez-update", VERSION, OS, "by Angus Mackay");
+  output(buf);
+  snprint(buf, BUFFER_SIZE, "Host: %s\015\012", server);
+  output(buf);
+
+  p = putbuf;
+  *p = '\0';
+  limit = BUFFER_SIZE - 1 - strlen(buf);
+  snprint(p, limit, "hostscmd=edit&hostscmdstage=2&type=4&");
+  p += strlen(p);
+  limit = BUFFER_SIZE - 1 - strlen(buf);
+  snprint(p, limit, "%s=%s&", "updatetype", "Online");
+  p += strlen(p);
+  limit = BUFFER_SIZE - 1 - strlen(buf);
+  snprint(p, limit, "%s=%s&", "ip", address);
+  p += strlen(p);
+  limit = BUFFER_SIZE - 1 - strlen(buf);
+  snprint(p, limit, "%s=%s&", "mx", mx);
+  p += strlen(p);
+  limit = BUFFER_SIZE - 1 - strlen(buf);
+  snprint(p, limit, "%s=%s&", "offline_url", url);
+  p += strlen(p);
+  limit = BUFFER_SIZE - 1 - strlen(buf);
+  if(cloak_title)
+  {
+    snprint(p, limit, "%s=%s&", "cloak", "Y");
+    p += strlen(p);
+    limit = BUFFER_SIZE - 1 - strlen(buf);
+    snprint(p, limit, "%s=%s&", "cloak_title", cloak_title);
+    p += strlen(p);
+    limit = BUFFER_SIZE - 1 - strlen(buf);
+  }
+  else
+  {
+    snprint(p, limit, "%s=%s&", "cloak_title", "");
+    p += strlen(p);
+    limit = BUFFER_SIZE - 1 - strlen(buf);
+  }
+  snprint(p, limit, "%s=%s&", "submit", "Update");
+  p += strlen(p);
+  limit = BUFFER_SIZE - 1 - strlen(buf);
+  snprint(p, limit, "%s=%s&", "domain", domain);
+  p += strlen(p);
+  limit = BUFFER_SIZE - 1 - strlen(buf);
+  snprint(p, limit, "%s=%s", "hostname", hostname);
+  p += strlen(p);
+  limit = BUFFER_SIZE - 1 - strlen(buf);
+
+  snprint(buf, BUFFER_SIZE, "Content-length: %d\015\012", strlen(putbuf));
+  output(buf);
+  snprint(buf, BUFFER_SIZE, "\015\012");
+  output(buf);
+
+  output(putbuf);
+  snprint(buf, BUFFER_SIZE, "\015\012");
+  output(buf);
+
+  bp = buf;
+  bytes = 0;
+  btot = 0;
+  while((bytes=read_input(bp, BUFFER_SIZE-btot)) > 0)
+  {
+    bp += bytes;
+    btot += bytes;
+    dprintf((stderr, "btot: %d\n", btot));
+  }
+  close(client_sockfd);
+  buf[btot] = '\0';
+
+  dprintf((stderr, "server output: %s\n", buf));
+
+  if(sscanf(buf, " HTTP/1.%*c %3d", &ret) != 1)
+  {
+    ret = -1;
+  }
+
+  switch(ret)
+  {
+    case -1:
+      if(!(options & OPT_QUIET))
+      {
+        fprintf(stderr, "strange server response, are you connecting to the right server?\n");
+      }
+      retval = -1;
+      break;
+
+    case 200:
+      if(!(options & OPT_QUIET))
+      {
+        printf("request successful\n");
+      }
+      break;
+
+    case 401:
+      if(!(options & OPT_QUIET))
+      {
+        fprintf(stderr, "authentication failure\n");
+      }
+      retval = -1;
+      break;
+
+    default:
+      if(!(options & OPT_QUIET))
+      {
+        // reuse the auth buffer
+        *auth = '\0';
+        sscanf(buf, " HTTP/1.%*c %*3d %255[^\r\n]", auth);
+        fprintf(stderr, "unknown return code: %d\n", ret);
+        fprintf(stderr, "server response: %s\n", auth);
+      }
+      retval = -1;
+      break;
+  }
+
+  // okay, dhs's service is incredibly stupid and will not work with two
+  // requests right after each other. I could care less that this is ugly,
+  // I personally will NEVER use dhs, it is laughable.
+  sleep(DHS_SUCKY_TIMEOUT < timeout.tv_sec ? DHS_SUCKY_TIMEOUT : timeout.tv_sec);
+
+  // this stupid service requires us to do seperate request if we want to 
+  // update the mail exchanger (mx). grrrrrr
+  if(*mx != '\0')
+  {
+    if(do_connect((int*)&client_sockfd, server, port) != 0)
+    {
+      if(!(options & OPT_QUIET))
+      {
+        fprintf(stderr, "error connecting to %s:%s\n", server, port);
+      }
+      close(client_sockfd);
+      return(-1);
+    }
+
+    snprint(buf, BUFFER_SIZE, "POST %s HTTP/1.0\015\012", request);
+    output(buf);
+    snprint(buf, BUFFER_SIZE, "Authorization: Basic %s\015\012", auth);
+    output(buf);
+    snprint(buf, BUFFER_SIZE, "User-Agent: %s-%s %s (%s)\015\012", 
+        "ez-update", VERSION, OS, "by Angus Mackay");
+    output(buf);
+    snprint(buf, BUFFER_SIZE, "Host: %s\015\012", server);
+    output(buf);
+
+    p = putbuf;
+    *p = '\0';
+    limit = BUFFER_SIZE - 1 - strlen(buf);
+    snprint(p, limit, "hostscmd=edit&hostscmdstage=2&type=4&");
+    p += strlen(p);
+    limit = BUFFER_SIZE - 1 - strlen(buf);
+    snprint(p, limit, "%s=%s&", "updatetype", "Update+Mail+Exchanger");
+    p += strlen(p);
+    limit = BUFFER_SIZE - 1 - strlen(buf);
+    snprint(p, limit, "%s=%s&", "ip", address);
+    p += strlen(p);
+    limit = BUFFER_SIZE - 1 - strlen(buf);
+    snprint(p, limit, "%s=%s&", "mx", mx);
+    p += strlen(p);
+    limit = BUFFER_SIZE - 1 - strlen(buf);
+    snprint(p, limit, "%s=%s&", "offline_url", url);
+    p += strlen(p);
+    limit = BUFFER_SIZE - 1 - strlen(buf);
+    if(cloak_title)
+    {
+      snprint(p, limit, "%s=%s&", "cloak", "Y");
+      p += strlen(p);
+      limit = BUFFER_SIZE - 1 - strlen(buf);
+      snprint(p, limit, "%s=%s&", "cloak_title", cloak_title);
+      p += strlen(p);
+      limit = BUFFER_SIZE - 1 - strlen(buf);
+    }
+    else
+    {
+      snprint(p, limit, "%s=%s&", "cloak_title", "");
+      p += strlen(p);
+      limit = BUFFER_SIZE - 1 - strlen(buf);
+    }
+    snprint(p, limit, "%s=%s&", "submit", "Update");
+    p += strlen(p);
+    limit = BUFFER_SIZE - 1 - strlen(buf);
+    snprint(p, limit, "%s=%s&", "domain", domain);
+    p += strlen(p);
+    limit = BUFFER_SIZE - 1 - strlen(buf);
+    snprint(p, limit, "%s=%s", "hostname", hostname);
+    p += strlen(p);
+    limit = BUFFER_SIZE - 1 - strlen(buf);
+
+    snprint(buf, BUFFER_SIZE, "Content-length: %d\015\012", strlen(putbuf));
+    output(buf);
+    snprint(buf, BUFFER_SIZE, "\015\012");
+    output(buf);
+
+    output(putbuf);
+    snprint(buf, BUFFER_SIZE, "\015\012");
+    output(buf);
+
+    bp = buf;
+    bytes = 0;
+    btot = 0;
+    while((bytes=read_input(bp, BUFFER_SIZE-btot)) > 0)
+    {
+      bp += bytes;
+      btot += bytes;
+      dprintf((stderr, "btot: %d\n", btot));
+    }
+    close(client_sockfd);
+    buf[btot] = '\0';
+
+    dprintf((stderr, "server output: %s\n", buf));
+
+    if(sscanf(buf, " HTTP/1.%*c %3d", &ret) != 1)
+    {
+      ret = -1;
+    }
+
+    switch(ret)
+    {
+      case -1:
+        if(!(options & OPT_QUIET))
+        {
+          fprintf(stderr, "strange server response, are you connecting to the right server?\n");
+        }
+        retval = -1;
+        break;
+
+      case 200:
+        if(!(options & OPT_QUIET))
+        {
+          printf("request successful\n");
+        }
+        break;
+
+      case 401:
+        if(!(options & OPT_QUIET))
+        {
+          fprintf(stderr, "authentication failure\n");
+        }
+        retval = -1;
+        break;
+
+      default:
+        if(!(options & OPT_QUIET))
+        {
+          // reuse the auth buffer
+          *auth = '\0';
+          sscanf(buf, " HTTP/1.%*c %*3d %255[^\r\n]", auth);
+          fprintf(stderr, "unknown return code: %d\n", ret);
+          fprintf(stderr, "server response: %s\n", auth);
+        }
+        retval = -1;
+        break;
+    }
+  }
+
+  return(retval);
+}
+
+
 void handle_sig(int sig)
 {
   switch(sig)
@@ -1416,7 +1818,7 @@ int main( int argc, char **argv )
 
 #  if HAVE_SYSLOG_H
     openlog(program_name, LOG_PID, LOG_USER );
-    syslog(LOG_NOTICE, "ez-ipupdate Version %s, Copyright (C) 1999 Angus Mackay.\n", 
+    syslog(LOG_NOTICE, "ez-ipupdate Version %s, Copyright (C) 1998-2000 Angus Mackay.\n", 
         VERSION);
     syslog(LOG_NOTICE, "%s started for interface %s using server %s\n",
         program_name, interface, server);
