@@ -1,7 +1,7 @@
 
 RCS file: /home/amackay/src/cvsroot/ez-ipupdate/ez-ipupdate.c,v
 Working file: ez-ipupdate.c
-head: 1.23
+head: 1.31
 branch:
 locks: strict
 access list:
@@ -11,8 +11,40 @@ symbolic names:
 	v0_9_0: 1.1.1.1
 	AMACKAY: 1.1.1
 keyword substitution: kv
-total revisions: 24;	selected revisions: 24
+total revisions: 32;	selected revisions: 32
 description:
+----------------------------
+revision 1.31
+date: 2000/10/31 05:51:51;  author: amackay;  state: Exp;  lines: +119 -28
+updated to nic v2.0 for dyndns, also fixed some problems with not asking for a host.
+----------------------------
+revision 1.30
+date: 2000/10/23 17:54:17;  author: amackay;  state: Exp;  lines: +4 -7
+fixed some minor things in the code and cleaned up the example config files
+----------------------------
+revision 1.29
+date: 2000/10/23 09:52:27;  author: amackay;  state: Exp;  lines: +8 -11
+took out some debugging stuff and fixed exit() calls in daemon mode for cache file code.
+----------------------------
+revision 1.28
+date: 2000/10/23 09:48:29;  author: amackay;  state: Exp;  lines: +188 -28
+added support for a cache file for use across reboots and such.
+----------------------------
+revision 1.27
+date: 2000/10/16 06:57:12;  author: amackay;  state: Exp;  lines: +4 -2
+.
+----------------------------
+revision 1.26
+date: 2000/10/16 06:52:39;  author: amackay;  state: Exp;  lines: +292 -38
+added support for justlinux v2.0, now pgpow is justlinux v1.0 and justlinux is justlinux v2.0.
+----------------------------
+revision 1.25
+date: 2000/09/06 01:46:51;  author: amackay;  state: Exp;  lines: +9 -2
+added ip address as an arg if in deamon mode and using post update script.
+----------------------------
+revision 1.24
+date: 2000/09/05 03:25:13;  author: amackay;  state: Exp;  lines: +2 -1
+bug in configure.in for easydns.
 ----------------------------
 revision 1.23
 date: 2000/08/22 17:23:16;  author: amackay;  state: Exp;  lines: +262 -83

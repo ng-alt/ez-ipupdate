@@ -37,6 +37,17 @@
 
 #include <conf_file.h>
 
+#if HAVE_STRERROR
+extern int errno;
+#  define error_string strerror(errno)
+#elif HAVE_SYS_ERRLIST
+extern const char *const sys_errlist[];
+extern int errno;
+#  define error_string (sys_errlist[errno])
+#else
+#  define error_string "error message not found"
+#endif
+
 #ifdef DEBUG
 #define dprintf(x) if( options & OPT_DEBUG ) \
 { \
@@ -62,6 +73,9 @@ int parse_conf_file(char *fname, struct conf_cmd *commands)
   struct conf_cmd *cmd;
   int lnum = 0;
 
+  // safety first
+  buf[BUFSIZ] = '\0';
+
   if(strcmp("-", fname) == 0)
   {
     in = stdin;
@@ -71,7 +85,7 @@ int parse_conf_file(char *fname, struct conf_cmd *commands)
   {
     if((in=fopen(fname, "r")) == NULL)
     {
-      fprintf(stderr, "could not open config file \"%s\"\n", fname);
+      fprintf(stderr, "could not open config file \"%s\": %s\n", fname, error_string);
       return(-1);
     }
   }

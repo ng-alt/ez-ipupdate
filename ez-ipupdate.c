@@ -54,8 +54,8 @@
 
 #define DYNDNS_DEFAULT_SERVER "members.dyndns.org"
 #define DYNDNS_DEFAULT_PORT "80"
-#define DYNDNS_REQUEST "/nic/dyndns"
-#define DYNDNS_STAT_REQUEST "/nic/statdns"
+#define DYNDNS_REQUEST "/nic/update"
+#define DYNDNS_STAT_REQUEST "/nic/update"
 
 #define ODS_DEFAULT_SERVER "update.ods.org"
 #define ODS_DEFAULT_PORT "7070"
@@ -72,6 +72,20 @@
 #define EASYDNS_DEFAULT_SERVER "members.easydns.com"
 #define EASYDNS_DEFAULT_PORT "80"
 #define EASYDNS_REQUEST "/dyn/ez-ipupdate.php"
+
+#define JUSTL_DEFAULT_SERVER "www.justlinux.com"
+#define JUSTL_DEFAULT_PORT "80"
+#define JUSTL_REQUEST "/bin/controlpanel/dyndns/jlc.pl"
+#define JUSTL_VERSION "2.0"
+
+
+#ifdef USE_MD5
+#  define SERVICES_STR "ezip, pgpow, dhs, dyndns, dyndns-static, ods, tzo, gnudip, easydns, justlinux"
+#  define SERVICES_HELP_STR "ezip, pgpow, dhs, dyndns, \n\t\t\t\tdyndns-static, ods, tzo, gnudip, easydns, \n\t\t\t\tjustlinux"
+#else
+#  define SERVICES_STR "ezip, pgpow, dhs, dyndns, dyndns-static, ods, tzo, easydns, justlinux"
+#  define SERVICES_HELP_STR "ezip, pgpow, dhs, dyndns, \n\t\t\t\tdyndns-static, ods, tzo, easydns, \n\t\t\t\tjustlinux"
+#endif
 
 #define DEFAULT_TIMEOUT 120
 #define DEFAULT_UPDATE_PERIOD 600
@@ -152,6 +166,7 @@ extern int errno;
 #endif
 
 #include <conf_file.h>
+#include <cache_file.h>
 
 #if !defined(__GNUC__) && !defined(HAVE_SNPRINTF)
 #error "get gcc, fix this code, or find yourself a snprintf!"
@@ -181,6 +196,8 @@ extern int errno;
 #  define OS "unknown"
 #endif
 
+#define ARGLENGTH 32
+
 /**************************************************/
 
 enum {
@@ -192,7 +209,8 @@ enum {
   SERV_ODS,
   SERV_TZO,
   SERV_GNUDIP,
-  SERV_EASYDNS
+  SERV_EASYDNS,
+  SERV_JUSTL
 };
 
 struct service_t
@@ -209,30 +227,33 @@ struct service_t
 
 /**************************************************/
 
-static char *program_name = NULL;
-static char *config_file = NULL;
-static char *server = NULL;
-static char *port = NULL;
-static char user[256];
-static char auth[512];
-static char user_name[128];
-static char password[128];
-static char *address = NULL;
-static char *request = NULL;
-static int wildcard = 0;
-static char *mx = NULL;
-static char *url = NULL;
-static char *host = NULL;
-static char *cloak_title = NULL;
-static char *interface = NULL;
-static int ntrys = 1;
-static int update_period = DEFAULT_UPDATE_PERIOD;
-static int resolv_period = DEFAULT_UPDATE_PERIOD/10;
-static struct timeval timeout;
-static int max_interval = 0;
-static int service_set = 0;
-static char *post_update_cmd = NULL;
-static int connection_type = 1;
+char *program_name = NULL;
+char *cache_file = NULL;
+char *config_file = NULL;
+char *server = NULL;
+char *port = NULL;
+char user[256];
+char auth[512];
+char user_name[128];
+char password[128];
+char *address = NULL;
+char *request = NULL;
+int wildcard = 0;
+char *mx = NULL;
+char *url = NULL;
+char *host = NULL;
+char *cloak_title = NULL;
+char *interface = NULL;
+int ntrys = 1;
+int update_period = DEFAULT_UPDATE_PERIOD;
+int resolv_period = DEFAULT_UPDATE_PERIOD/10;
+struct timeval timeout;
+int max_interval = 0;
+int service_set = 0;
+char *post_update_cmd = NULL;
+char *post_update_cmd_arg = NULL;
+int connection_type = 1;
+time_t last_update = 0;
 
 static volatile int client_sockfd;
 static volatile int last_sig = 0;
@@ -257,7 +278,7 @@ int PGPOW_check_info(void);
 static char *PGPOW_fields_used[] = { "server", "host", NULL };
 static struct service_t PGPOW_service = {
   SERV_PGPOW,
-  "justlinux (penguinpowered)",
+  "justlinux v1.0 (penguinpowered)",
   PGPOW_update_entry,
   PGPOW_check_info,
   PGPOW_fields_used,
@@ -294,15 +315,13 @@ static struct service_t DYNDNS_service = {
   DYNDNS_REQUEST
 };
 
-int DYNDNS_STAT_update_entry(void);
-int DYNDNS_STAT_check_info(void);
 static char *DYNDNS_STAT_fields_used[] = { "server", "user", "address", "wildcard", "mx", "host", NULL };
 static struct service_t DYNDNS_STAT_service = {
   SERV_DYNDNS_STAT,
   "dyndns-static",
   DYNDNS_update_entry,
   DYNDNS_check_info,
-  DYNDNS_fields_used,
+  DYNDNS_STAT_fields_used,
   DYNDNS_DEFAULT_SERVER,
   DYNDNS_DEFAULT_PORT,
   DYNDNS_STAT_REQUEST
@@ -366,6 +385,20 @@ static struct service_t GNUDIP_service = {
 };
 #endif
 
+int JUSTL_update_entry(void);
+int JUSTL_check_info(void);
+static char *JUSTL_fields_used[] = { "server", "user", "host", NULL };
+static struct service_t JUSTL_service = {
+  SERV_JUSTL,
+  "justlinux v2.0 (penguinpowered)",
+  JUSTL_update_entry,
+  JUSTL_check_info,
+  JUSTL_fields_used,
+  JUSTL_DEFAULT_SERVER,
+  JUSTL_DEFAULT_PORT,
+  JUSTL_REQUEST
+};
+
 /* default to EZIP for historical reasons */
 static struct service_t *service = &DEF_SERVICE;
 
@@ -400,15 +433,17 @@ enum {
   CMD_timeout,
   CMD_run_as_user,
   CMD_connection_type,
+  CMD_cache_file,
   CMD__end
 };
 
 int conf_handler(struct conf_cmd *cmd, char *arg);
 static struct conf_cmd conf_commands[] = {
   { CMD_address,         "address",         CONF_NEED_ARG, 1, conf_handler, "%s=<ip address>" },
-  { CMD_cloak_title,     "cloak_title",     CONF_NEED_ARG, 1, conf_handler, "%s=<title>" },
+  { CMD_cache_file,      "cache-file",      CONF_NEED_ARG, 1, conf_handler, "%s=<cache file>" },
+  { CMD_cloak_title,     "cloak-title",     CONF_NEED_ARG, 1, conf_handler, "%s=<title>" },
   { CMD_daemon,          "daemon",          CONF_NO_ARG,   1, conf_handler, "%s=<command>" },
-  { CMD_execute,         "execute",         CONF_NEED_ARG, 1, conf_handler, "%s" },
+  { CMD_execute,         "execute",         CONF_NEED_ARG, 1, conf_handler, "%s=<shell command>" },
   { CMD_debug,           "debug",           CONF_NO_ARG,   1, conf_handler, "%s" },
   { CMD_foreground,      "foreground",      CONF_NO_ARG,   1, conf_handler, "%s" },
   { CMD_host,            "host",            CONF_NEED_ARG, 1, conf_handler, "%s=<host>" },
@@ -417,7 +452,7 @@ static struct conf_cmd conf_commands[] = {
   { CMD_max_interval,    "max-interval",    CONF_NEED_ARG, 1, conf_handler, "%s=<number of seconds between updates>" },
   { CMD_retrys,          "retrys",          CONF_NEED_ARG, 1, conf_handler, "%s=<number of trys>" },
   { CMD_server,          "server",          CONF_NEED_ARG, 1, conf_handler, "%s=<server name>" },
-  { CMD_service_type,    "service-type",    CONF_NEED_ARG, 1, conf_handler, "%s=<ezip|pgpower>" },
+  { CMD_service_type,    "service-type",    CONF_NEED_ARG, 1, conf_handler, "%s=<service type>" },
   { CMD_timeout,         "timeout",         CONF_NEED_ARG, 1, conf_handler, "%s=<sec.millisec>" },
   { CMD_resolv_period,   "resolv-period",   CONF_NEED_ARG, 1, conf_handler, "%s=<time between failed resolve attempts>" },
   { CMD_period,          "period",          CONF_NEED_ARG, 1, conf_handler, "%s=<time between update attempts>" },
@@ -448,6 +483,7 @@ void print_usage( void )
   fprintf(stdout, "%s [options] \n\n", program_name);
   fprintf(stdout, " Options are:\n");
   fprintf(stdout, "  -a, --address <ip address>\tstring to send as your ip address\n");
+  fprintf(stdout, "  -b, --cache-file <file>\tfile to use for caching the ipaddress\n");
   fprintf(stdout, "  -c, --config-file <file>\tconfiguration file, almost all arguments can be\n");
   fprintf(stdout, "\t\t\t\tgiven with: <name>[=<value>]\n\t\t\t\tto see a list of possible config commands\n");
   fprintf(stdout, "\t\t\t\ttry \"echo help | %s -c -\"\n", program_name);
@@ -469,12 +505,7 @@ void print_usage( void )
   fprintf(stdout, "  -R, --run-as-user <user>\tchange to <user> for running, be ware\n\t\t\t\tthat this can cause problems with handeling\n\t\t\t\tSIGHUP properly if that user can't read the\n\t\t\t\tconfig file\n");
   fprintf(stdout, "  -s, --server <server[:port]>\tthe server to connect to\n");
   fprintf(stdout, "  -S, --service-type <server>\tthe type of service that you are using\n");
-  fprintf(stdout, "\t\t\t\ttry one of: ezip, pgpow, dhs, dyndns\n");
-#ifdef USE_MD5
-  fprintf(stdout, "\t\t\t\tdyndns-static, ods, tzo, gnudip, easydns\n");
-#else
-  fprintf(stdout, "\t\t\t\tdyndns-static, ods, tzo, easydns\n");
-#endif
+  fprintf(stdout, "\t\t\t\ttry one of: %s\n", SERVICES_HELP_STR);
   fprintf(stdout, "  -t, --timeout <sec.millisec>\tthe amount of time to wait on I/O\n");
   fprintf(stdout, "  -T, --connection-type <num>\tnumber sent to TZO as your connection \n\t\t\t\ttype (default: 1)\n");
   fprintf(stdout, "  -U, --url <url>\t\tstring to send as the url parameter\n");
@@ -489,7 +520,7 @@ void print_usage( void )
 
 void print_version( void )
 {
-  fprintf(stdout, "%s: - %s - $Id: ez-ipupdate.c,v 1.23 2000/08/22 17:23:16 amackay Exp $\n", program_name, VERSION);
+  fprintf(stdout, "%s: - %s - $Id: ez-ipupdate.c,v 1.31 2000/10/31 05:51:51 amackay Exp $\n", program_name, VERSION);
 }
 
 void print_credits( void )
@@ -517,7 +548,7 @@ RETSIGTYPE sigint_handler(int sig)
   char message[] = "interupted.\n";
   close(client_sockfd);
   write(2, message, sizeof(message)-1);
-  exit(0);
+  exit(1);
 }
 RETSIGTYPE generic_sig_handler(int sig)
 {
@@ -575,7 +606,9 @@ int option_handler(int id, char *optarg)
     case CMD_execute:
 #if defined(HAVE_WAITPID) || defined(HAVE_WAIT)
       if(post_update_cmd) { free(post_update_cmd); }
-      post_update_cmd = strdup(optarg);
+      post_update_cmd = malloc(strlen(optarg) + 1 + ARGLENGTH + 1);
+      post_update_cmd_arg = post_update_cmd + strlen(optarg) + 1;
+      sprintf(post_update_cmd, "%s ", optarg);
       dprintf((stderr, "post_update_cmd: %s\n", post_update_cmd));
 #else
       fprintf(stderr, "command execution not enabled at compile time\n");
@@ -651,8 +684,7 @@ int option_handler(int id, char *optarg)
         service = &EZIP_service;
       }
       else if(strcmp("pgpow", optarg) == 0 || 
-          strcmp("penguinpowered", optarg) == 0 ||
-          strcmp("justlinix", optarg) == 0)
+          strcmp("penguinpowered", optarg) == 0)
       {
         service = &PGPOW_service;
       }
@@ -665,7 +697,8 @@ int option_handler(int id, char *optarg)
         service = &DYNDNS_service;
       }
       else if(strcmp("dyndns-stat", optarg) == 0 ||
-          strcmp("dyndns-static", optarg) == 0)
+          strcmp("dyndns-static", optarg) == 0 ||
+          strcmp("statdns", optarg) == 0)
       {
         service = &DYNDNS_STAT_service;
       }
@@ -687,18 +720,19 @@ int option_handler(int id, char *optarg)
         service = &GNUDIP_service;
       }
 #endif
+      else if(strcmp("justlinux", optarg) == 0)
+      {
+        service = &JUSTL_service;
+      }
       else
       {
         fprintf(stderr, "unknown service type: %s\n", optarg);
-#ifdef USE_MD5
-        fprintf(stderr, "try one of: ezip, pgpow, dhs, dyndns, dyndns-static, ods, tzo, gnudip\n");
-#else
-        fprintf(stderr, "try one of: ezip, pgpow, dhs, dyndns, dyndns-static, ods, tzo\n");
-#endif
+        fprintf(stderr, "try one of: %s\n", SERVICES_STR);
         exit(1);
       }
       service_set = 1;
       dprintf((stderr, "service_type: %s\n", service->name));
+      dprintf((stderr, "service->type: %d\n", service->type));
       break;
 
     case CMD_user:
@@ -766,6 +800,12 @@ int option_handler(int id, char *optarg)
       dprintf((stderr, "connection_type: %d\n", connection_type));
       break;
 
+    case CMD_cache_file:
+      if(cache_file) { free(cache_file); }
+      cache_file = strdup(optarg);
+      dprintf((stderr, "cache_file: %s\n", cache_file));
+      break;
+
     default:
       dprintf((stderr, "case not handled: %d\n", id));
       break;
@@ -791,7 +831,9 @@ void parse_args( int argc, char **argv )
 #ifdef HAVE_GETOPT_LONG
   struct option long_options[] = {
       {"address",         required_argument,      0, 'a'},
+      {"cache-file",      required_argument,      0, 'b'},
       {"config_file",     required_argument,      0, 'c'},
+      {"config-file",     required_argument,      0, 'c'},
       {"daemon",          no_argument,            0, 'd'},
       {"debug",           no_argument,            0, 'D'},
       {"execute",         required_argument,      0, 'e'},
@@ -824,13 +866,17 @@ void parse_args( int argc, char **argv )
 #endif
   int opt;
 
-  while((opt=xgetopt(argc, argv, "a:c:dDe:fh:i:L:m:M:p:P:qr:R:s:S:t:T:U:u:wHVCZ", 
+  while((opt=xgetopt(argc, argv, "a:b:c:dDe:fh:i:L:m:M:p:P:qr:R:s:S:t:T:U:u:wHVCZ", 
           long_options, NULL)) != -1)
   {
     switch (opt)
     {
       case 'a':
         option_handler(CMD_address, optarg);
+        break;
+
+      case 'b':
+        option_handler(CMD_cache_file, optarg);
         break;
 
       case 'c':
@@ -1260,12 +1306,17 @@ int PGPOW_check_info(void)
 {
   char buf[BUFSIZ+1];
 
-  if(host == NULL)
+  if((host == NULL) || (*host == '\0'))
   {
+    if(options & OPT_DAEMON)
+    {
+      return(-1);
+    }
+    if(host) { free(host); }
     printf("host: ");
     fgets(buf, BUFSIZ, stdin);
-    chomp(buf);
     host = strdup(buf);
+    chomp(host);
   }
 
   warn_fields(service->fields_used);
@@ -1284,12 +1335,17 @@ int ODS_check_info(void)
 {
   char buf[BUFSIZ+1];
 
-  if(host == NULL)
+  if((host == NULL) || (*host == '\0'))
   {
+    if(options & OPT_DAEMON)
+    {
+      return(-1);
+    }
+    if(host) { free(host); }
     printf("host: ");
     fgets(buf, BUFSIZ, stdin);
-    chomp(buf);
     host = strdup(buf);
+    chomp(host);
   }
 
   warn_fields(service->fields_used);
@@ -1402,6 +1458,21 @@ int EZIP_update_entry(void)
 
 int DYNDNS_check_info(void)
 {
+  char buf[BUFSIZ+1];
+
+  if((host == NULL) || (*host == '\0'))
+  {
+    if(options & OPT_DAEMON)
+    {
+      return(-1);
+    }
+    if(host) { free(host); }
+    printf("host: ");
+    fgets(buf, BUFSIZ, stdin);
+    host = strdup(buf);
+    chomp(host);
+  }
+
   warn_fields(service->fields_used);
 
   return 0;
@@ -1414,11 +1485,12 @@ int DYNDNS_update_entry(void)
   int bytes;
   int btot;
   int ret;
+  int retval = 0;
 
   buf[BUFFER_SIZE] = '\0';
 
   // make sure that we can get our own ip address first
-  if((options & OPT_DAEMON) || address == NULL || *address == '\0')
+  if((options & OPT_DAEMON) && (address == NULL || *address == '\0'))
   {
 #ifdef IF_LOOKUP
     struct sockaddr_in sin;
@@ -1443,10 +1515,18 @@ int DYNDNS_update_entry(void)
     }
     close(sock);
 #else
-    printf("ip address: ");
-    fgets(buf, BUFSIZ, stdin);
-    chomp(buf);
-    address = strdup(buf);
+    if(options & OPT_DAEMON)
+    {
+      fprintf(stderr, "could not resolve ip address.\n");
+      return(-1);
+    }
+    else
+    {
+      printf("ip address: ");
+      fgets(buf, BUFSIZ, stdin);
+      chomp(buf);
+      address = strdup(buf);
+    }
 #endif
   }
 
@@ -1459,18 +1539,29 @@ int DYNDNS_update_entry(void)
     return(-1);
   }
 
-  snprintf(buf, BUFFER_SIZE, "GET %s?action=edit&started=1&hostname=YES&", request);
+  snprintf(buf, BUFFER_SIZE, "GET %s?", request);
   output(buf);
-  snprintf(buf, BUFFER_SIZE, "%s=%s&", "myip", address);
+  if(service->type == SERV_DYNDNS_STAT)
+  {
+    snprintf(buf, BUFFER_SIZE, "%s=%s&", "system", "statdns");
+    output(buf);
+  }
+  snprintf(buf, BUFFER_SIZE, "%s=%s&", "hostname", host);
   output(buf);
+  if(address != NULL && *address != '\0')
+  {
+    snprintf(buf, BUFFER_SIZE, "%s=%s&", "myip", address);
+    output(buf);
+  }
   snprintf(buf, BUFFER_SIZE, "%s=%s&", "wildcard", wildcard ? "ON" : "OFF");
   output(buf);
-  snprintf(buf, BUFFER_SIZE, "%s=%s&", "mx", mx);
-  output(buf);
-  snprintf(buf, BUFFER_SIZE, "%s=%s&", "backmx", "NO");
-  output(buf);
-  snprintf(buf, BUFFER_SIZE, "%s=%s&", "host_id", host);
-  output(buf);
+  if(mx != NULL && *mx != '\0')
+  {
+    snprintf(buf, BUFFER_SIZE, "%s=%s&", "mx", mx);
+    output(buf);
+  }
+  //snprintf(buf, BUFFER_SIZE, "%s=%s&", "backmx", "NO");
+  //output(buf);
   snprintf(buf, BUFFER_SIZE, " HTTP/1.0\015\012");
   output(buf);
   snprintf(buf, BUFFER_SIZE, "Authorization: Basic %s\015\012", auth);
@@ -1509,11 +1600,11 @@ int DYNDNS_update_entry(void)
       {
         fprintf(stderr, "strange server response, are you connecting to the right server?\n");
       }
-      return(-1);
+      retval = -1;
       break;
 
     case 200:
-      if(strstr(buf, "NOERROR\n") != NULL)
+      if(strstr(buf, "\ngood ") != NULL)
       {
         if(!(options & OPT_QUIET))
         {
@@ -1522,12 +1613,38 @@ int DYNDNS_update_entry(void)
       }
       else
       {
-        fprintf(stderr, "error processing request\n");
-        if(!(options & OPT_QUIET))
+        if(strstr(buf, "\nnohost") != NULL)
         {
-          fprintf(stderr, "server output: %s\n", buf);
+          fprintf(stderr, "invalid hostname: %s\n", host);
         }
-        return(-1);
+        else if(strstr(buf, "\nnotfqdn") != NULL)
+        {
+          fprintf(stderr, "malformed hostname: %s\n", host);
+        }
+        else if(strstr(buf, "\nnochg") != NULL)
+        {
+          fprintf(stderr, "your IP address has not changed since the last update\n");
+          // lets do a little hackery here and say that this counts as a successful update
+          // but we'll roll back the last update time to max_interval/2
+          if(max_interval > 0)
+          {
+            last_update = time(NULL) - max_interval/2;
+          }
+          retval = 0;
+        }
+        else if(strstr(buf, "\nbadauth") != NULL)
+        {
+          fprintf(stderr, "authentication failure\n");
+        }
+        else
+        {
+          fprintf(stderr, "error processing request\n");
+          if(!(options & OPT_QUIET))
+          {
+            fprintf(stderr, "==== server output: ====\n%s\n", buf);
+          }
+        }
+        retval = -1;
       }
       break;
 
@@ -1536,7 +1653,7 @@ int DYNDNS_update_entry(void)
       {
         fprintf(stderr, "authentication failure\n");
       }
-      return(-1);
+      retval = -1;
       break;
 
     default:
@@ -1548,11 +1665,11 @@ int DYNDNS_update_entry(void)
         fprintf(stderr, "unknown return code: %d\n", ret);
         fprintf(stderr, "server response: %s\n", auth);
       }
-      return(-1);
+      retval = -1;
       break;
   }
 
-  return 0;
+  return(retval);
 }
 
 int PGPOW_update_entry(void)
@@ -1589,10 +1706,18 @@ int PGPOW_update_entry(void)
       }
       close(sock);
 #else
-      printf("ip address: ");
-      fgets(buf, BUFSIZ, stdin);
-      chomp(buf);
-      address = strdup(buf);
+      if(options & OPT_DAEMON)
+      {
+        fprintf(stderr, "could not resolve ip address.\n");
+        return(-1);
+      }
+      else
+      {
+        printf("ip address: ");
+        fgets(buf, BUFSIZ, stdin);
+        chomp(buf);
+        address = strdup(buf);
+      }
 #endif
     }
   }
@@ -1755,6 +1880,21 @@ int PGPOW_update_entry(void)
 
 int DHS_check_info(void)
 {
+  char buf[BUFSIZ+1];
+
+  if((host == NULL) || (*host == '\0'))
+  {
+    if(options & OPT_DAEMON)
+    {
+      return(-1);
+    }
+    if(host) { free(host); }
+    printf("host: ");
+    fgets(buf, BUFSIZ, stdin);
+    host = strdup(buf);
+    chomp(host);
+  }
+
   warn_fields(service->fields_used);
 
   return 0;
@@ -1811,10 +1951,18 @@ int DHS_update_entry(void)
       }
       close(sock);
 #else
-      printf("ip address: ");
-      fgets(buf, BUFSIZ, stdin);
-      chomp(buf);
-      address = strdup(buf);
+      if(options & OPT_DAEMON)
+      {
+        fprintf(stderr, "could not resolve ip address.\n");
+        return(-1);
+      }
+      else
+      {
+        printf("ip address: ");
+        fgets(buf, BUFSIZ, stdin);
+        chomp(buf);
+        address = strdup(buf);
+      }
 #endif
     }
   }
@@ -2148,10 +2296,18 @@ int ODS_update_entry(void)
       }
       close(sock);
 #else
-      printf("ip address: ");
-      fgets(buf, BUFSIZ, stdin);
-      chomp(buf);
-      address = strdup(buf);
+      if(options & OPT_DAEMON)
+      {
+        fprintf(stderr, "could not resolve ip address.\n");
+        return(-1);
+      }
+      else
+      {
+        printf("ip address: ");
+        fgets(buf, BUFSIZ, stdin);
+        chomp(buf);
+        address = strdup(buf);
+      }
 #endif
     }
   }
@@ -2231,6 +2387,21 @@ int ODS_update_entry(void)
 
 int TZO_check_info(void)
 {
+  char buf[BUFSIZ+1];
+
+  if((host == NULL) || (*host == '\0'))
+  {
+    if(options & OPT_DAEMON)
+    {
+      return(-1);
+    }
+    if(host) { free(host); }
+    printf("host: ");
+    fgets(buf, BUFSIZ, stdin);
+    host = strdup(buf);
+    chomp(host);
+  }
+
   warn_fields(service->fields_used);
 
   return 0;
@@ -2368,6 +2539,21 @@ int TZO_update_entry(void)
 
 int EASYDNS_check_info(void)
 {
+  char buf[BUFSIZ+1];
+
+  if((host == NULL) || (*host == '\0'))
+  {
+    if(options & OPT_DAEMON)
+    {
+      return(-1);
+    }
+    if(host) { free(host); }
+    printf("host: ");
+    fgets(buf, BUFSIZ, stdin);
+    host = strdup(buf);
+    chomp(host);
+  }
+
   warn_fields(service->fields_used);
 
   return 0;
@@ -2409,10 +2595,18 @@ int EASYDNS_update_entry(void)
     }
     close(sock);
 #else
-    printf("ip address: ");
-    fgets(buf, BUFSIZ, stdin);
-    chomp(buf);
-    address = strdup(buf);
+    if(options & OPT_DAEMON)
+    {
+      fprintf(stderr, "could not resolve ip address.\n");
+      return(-1);
+    }
+    else
+    {
+      printf("ip address: ");
+      fgets(buf, BUFSIZ, stdin);
+      chomp(buf);
+      address = strdup(buf);
+    }
 #endif
   }
 
@@ -2529,6 +2723,10 @@ int GNUDIP_check_info(void)
 
   if((server == NULL) || (*server == '\0'))
   {
+    if(options & OPT_DAEMON)
+    {
+      return(-1);
+    }
     if(server) { free(server); }
     printf("server: ");
     fgets(buf, BUFSIZ, stdin);
@@ -2538,6 +2736,10 @@ int GNUDIP_check_info(void)
 
   if((host == NULL) || (*host == '\0'))
   {
+    if(options & OPT_DAEMON)
+    {
+      return(-1);
+    }
     if(host) { free(host); }
     printf("host: ");
     fgets(buf, BUFSIZ, stdin);
@@ -2689,6 +2891,183 @@ int GNUDIP_update_entry(void)
 }
 #endif
 
+int JUSTL_check_info(void)
+{
+  char buf[BUFSIZ+1];
+
+  if(host == NULL)
+  {
+    if(options & OPT_DAEMON)
+    {
+      return(-1);
+    }
+    printf("host: ");
+    fgets(buf, BUFSIZ, stdin);
+    chomp(buf);
+    host = strdup(buf);
+  }
+
+  warn_fields(service->fields_used);
+
+  return 0;
+}
+
+int JUSTL_update_entry(void)
+{
+  char buf[BUFFER_SIZE+1];
+  char *bp = buf;
+  int bytes;
+  int btot;
+  int ret;
+
+  buf[BUFFER_SIZE] = '\0';
+
+  // make sure that we can get our own ip address first
+  if((options & OPT_DAEMON) || address == NULL || *address == '\0')
+  {
+#ifdef IF_LOOKUP
+    struct sockaddr_in sin;
+    int sock;
+#endif
+
+    if(address) { free(address); address = NULL; }
+
+#ifdef IF_LOOKUP
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if(get_if_addr(sock, interface, &sin) == 0)
+    {
+      if(address) { free(address); }
+      address = strdup(inet_ntoa(sin.sin_addr));
+      close(sock);
+    }
+    else
+    {
+      fprintf(stderr, "could not resolve ip address.\n");
+      close(sock);
+      return(-1);
+    }
+    close(sock);
+#else
+    if(options & OPT_DAEMON)
+    {
+      fprintf(stderr, "could not resolve ip address.\n");
+      return(-1);
+    }
+    else
+    {
+      printf("ip address: ");
+      fgets(buf, BUFSIZ, stdin);
+      chomp(buf);
+      address = strdup(buf);
+    }
+#endif
+  }
+
+
+  if(do_connect((int*)&client_sockfd, server, port) != 0)
+  {
+    if(!(options & OPT_QUIET))
+    {
+      fprintf(stderr, "error connecting to %s:%s\n", server, port);
+    }
+    return(-1);
+  }
+
+  snprintf(buf, BUFFER_SIZE, "GET %s?direct=1&", request);
+  output(buf);
+  snprintf(buf, BUFFER_SIZE, "%s=%s&", "username", user_name);
+  output(buf);
+  snprintf(buf, BUFFER_SIZE, "%s=%s&", "password", password);
+  output(buf);
+  snprintf(buf, BUFFER_SIZE, "%s=%s&", "host", host);
+  output(buf);
+  snprintf(buf, BUFFER_SIZE, "%s=%s&", "ip", address);
+  output(buf);
+  snprintf(buf, BUFFER_SIZE, " HTTP/1.0\015\012");
+  output(buf);
+  snprintf(buf, BUFFER_SIZE, "Authorization: Basic %s\015\012", auth);
+  output(buf);
+  snprintf(buf, BUFFER_SIZE, "User-Agent: %s-%s %s (%s)\015\012", 
+      "ez-update", VERSION, OS, "by Angus Mackay");
+  output(buf);
+  snprintf(buf, BUFFER_SIZE, "Host: %s\015\012", server);
+  output(buf);
+  snprintf(buf, BUFFER_SIZE, "\015\012");
+  output(buf);
+
+  bp = buf;
+  bytes = 0;
+  btot = 0;
+  while((bytes=read_input(bp, BUFFER_SIZE-btot)) > 0)
+  {
+    bp += bytes;
+    btot += bytes;
+    dprintf((stderr, "btot: %d\n", btot));
+  }
+  close(client_sockfd);
+  buf[btot] = '\0';
+
+  dprintf((stderr, "server output: %s\n", buf));
+
+  if(sscanf(buf, " HTTP/1.%*c %3d", &ret) != 1)
+  {
+    ret = -1;
+  }
+
+  switch(ret)
+  {
+    case -1:
+      if(!(options & OPT_QUIET))
+      {
+        fprintf(stderr, "strange server response, are you connecting to the right server?\n");
+      }
+      return(-1);
+      break;
+
+    case 200:
+      if(strstr(buf, " set ") != NULL)
+      {
+        if(!(options & OPT_QUIET))
+        {
+          printf("request successful\n");
+        }
+      }
+      else
+      {
+        fprintf(stderr, "error processing request\n");
+        if(!(options & OPT_QUIET))
+        {
+          fprintf(stderr, "server output: %s\n", buf);
+        }
+        return(-1);
+      }
+      break;
+
+    case 401:
+      if(!(options & OPT_QUIET))
+      {
+        fprintf(stderr, "authentication failure\n");
+      }
+      return(-1);
+      break;
+
+    default:
+      if(!(options & OPT_QUIET))
+      {
+        // reuse the auth buffer
+        *auth = '\0';
+        sscanf(buf, " HTTP/1.%*c %*3d %255[^\r\n]", auth);
+        fprintf(stderr, "unknown return code: %d\n", ret);
+        fprintf(stderr, "server response: %s\n", auth);
+      }
+      return(-1);
+      break;
+  }
+
+  return 0;
+}
+
+
 static int is_in_list(char *needle, char **haystack)
 {
   char **p;
@@ -2761,7 +3140,7 @@ int exec_cmd(char *cmd)
       break;
     default:
       /* parent */
-      dprintf((stderr, "forked kid: %ld\n", kid));
+      dprintf((stderr, "forked kid: %d\n", kid));
       break;
   }
 
@@ -2821,11 +3200,8 @@ int main(int argc, char **argv)
   int ifresolve_warned = 0;
   int i;
   int retval = 1;
-  time_t last_update = 0;
 #ifdef IF_LOOKUP
   int sock = -1;
-  struct sockaddr_in sin;
-  struct sockaddr_in sin2;
 #endif
 
 #if defined(DEBUG) && defined(__linux__)
@@ -2925,6 +3301,9 @@ int main(int argc, char **argv)
   if(options & OPT_DAEMON)
   {
 #if IF_LOOKUP
+    struct sockaddr_in sin;
+    struct sockaddr_in sin2;
+
     /* background our selves */
     if(!(options & OPT_FOREGROUND))
     {
@@ -2944,7 +3323,37 @@ int main(int argc, char **argv)
         VERSION);
     LOG(LOG_LEV, "%s started for interface %s using server %s\n",
         program_name, interface, server);
+
     memset(&sin, 0, sizeof(sin));
+
+    if(cache_file)
+    {
+      time_t ipdate;
+      char *ipstr;
+      int cache_file_read = 0;
+
+      if(read_cache_file(cache_file, &ipdate, &ipstr) == 0)
+      {
+        dprintf((stderr, "cache date: %ld\n", ipdate));
+        dprintf((stderr, "cache IP: %s\n", ipstr));
+        cache_file_read = 1;
+
+        if(ipstr && strchr(ipstr, '.'))
+        {
+          inet_aton(ipstr, &sin.sin_addr);
+          last_update = ipdate;
+        }
+        else
+        {
+          cache_file_read = 0;
+        }
+        if(ipstr) { free(ipstr); ipstr = NULL; }
+      }
+      if(!cache_file_read)
+      {
+        LOG(LOG_LEV, "error reading cache file file \"%s\"\n", cache_file);
+      }
+    }
 
     for(;;)
     {
@@ -2959,27 +3368,33 @@ int main(int argc, char **argv)
       if(get_if_addr(sock, interface, &sin2) == 0)
       {
         ifresolve_warned = 0;
-        if(memcmp(&sin, &sin2, sizeof(sin)) != 0 || 
+        if(memcmp(&sin.sin_addr, &sin2.sin_addr, sizeof(struct in_addr)) != 0 || 
             (max_interval > 0 && time(NULL) - last_update > max_interval))
         {
+          // save this new ipaddr
           memcpy(&sin, &sin2, sizeof(sin));
 
           if(service->update_entry() == 0)
           {
+            last_update = time(NULL);
+
             LOG(LOG_LEV, "successful update for %s->%s\n",
                 interface, inet_ntoa(sin.sin_addr));
+
             if(post_update_cmd)
             {
               int res;
 
               if(post_update_cmd)
               {
+                sprintf(post_update_cmd_arg, "%s", inet_ntoa(sin.sin_addr));
+
                 if((res=exec_cmd(post_update_cmd)) != 0)
                 {
                   if(res == -1)
                   {
                     LOG(LOG_LEV, "error running post update command: %s\n",
-                        strerror(errno));
+                        error_string);
                   }
                   else
                   {
@@ -2990,7 +3405,18 @@ int main(int argc, char **argv)
                 }
               }
             }
-            last_update = time(NULL);
+
+            if(cache_file)
+            {
+              char ipbuf[64];
+
+              snprintf(ipbuf, sizeof(ipbuf), "%s", inet_ntoa(sin.sin_addr));
+
+              if(write_cache_file(cache_file, last_update, ipbuf) != 0)
+              {
+                LOG(LOG_LEV, "unable to write cache file: %s\n", error_string);
+              }
+            }
           }
           else
           {
@@ -3021,36 +3447,139 @@ int main(int argc, char **argv)
   }
   else
   {
-    int res;
+    int need_update = 1;
 
-    for(i=0; i<ntrys; i++)
+    if(cache_file)
     {
-      if(service->update_entry() == 0)
+      time_t ipdate;
+      char *ipstr;
+      char ipbuf[64];
+
+      if(read_cache_file(cache_file, &ipdate, &ipstr) != 0)
       {
-        retval = 0;
-        break;
+        exit(1);
       }
-      if(i+1 != ntrys) { sleep(5); }
-    }
-    if(retval == 0 && post_update_cmd)
-    {
-      if((res=exec_cmd(post_update_cmd)) != 0)
+      dprintf((stderr, "cache date: %ld\n", ipdate));
+      dprintf((stderr, "cache IP: %s\n", ipstr));
+
+      // check that the cache file contained something
+      if(ipstr != NULL)
       {
-        if(!(options & OPT_QUIET))
+
+        if(address == NULL || *address == '\0')
         {
-          if(res == -1)
+#ifdef IF_LOOKUP
+          struct sockaddr_in sin;
+          int sock;
+
+          sock = socket(AF_INET, SOCK_STREAM, 0);
+          if(get_if_addr(sock, interface, &sin) != 0)
           {
-            fprintf(stderr, "error running post update command: %s\n",
-                strerror(errno));
+            exit(1);
           }
-          else
+          close(sock);
+          snprintf(ipbuf, sizeof(ipbuf), "%s", inet_ntoa(sin.sin_addr));
+#else
+          fprintf(stderr, "interface lookup not enabled at compile time\n");
+          exit(1);
+#endif
+        }
+        else
+        {
+          snprintf(ipbuf, sizeof(ipbuf), "%s", address);
+        }
+
+        // check for a change in the IP
+        if(strcmp(ipstr, ipbuf) == 0)
+        {
+          dprintf((stderr, "cache IP doesn't need updating\n"));
+          need_update = 0;
+        }
+
+        // check the date
+        if(max_interval > 0)
+        {
+          if(time(NULL) - ipdate > max_interval)
           {
-            fprintf(stderr, 
-                "error running post update command, command exit code: %d\n",
-                res);
+            dprintf((stderr, "cache IP is passed max_interval of %d\n", max_interval));
+            need_update = 1;
           }
         }
       }
+      if(ipstr) { free(ipstr); ipstr = NULL; }
+    }
+
+    if(need_update)
+    {
+      int res;
+
+      for(i=0; i<ntrys; i++)
+      {
+        if(service->update_entry() == 0)
+        {
+          retval = 0;
+          break;
+        }
+        if(i+1 != ntrys) { sleep(5); }
+      }
+      if(retval == 0 && post_update_cmd)
+      {
+        if((res=exec_cmd(post_update_cmd)) != 0)
+        {
+          if(!(options & OPT_QUIET))
+          {
+            if(res == -1)
+            {
+              fprintf(stderr, "error running post update command: %s\n",
+                  error_string);
+            }
+            else
+            {
+              fprintf(stderr, 
+                  "error running post update command, command exit code: %d\n",
+                  res);
+            }
+          }
+        }
+      }
+
+      // write cache file
+      if(retval == 0 && cache_file)
+      {
+        char ipbuf[64];
+
+        if(address == NULL || *address == '\0')
+        {
+#ifdef IF_LOOKUP
+          struct sockaddr_in sin;
+          int sock;
+
+          sock = socket(AF_INET, SOCK_STREAM, 0);
+          if(get_if_addr(sock, interface, &sin) != 0)
+          {
+            exit(1);
+          }
+          close(sock);
+          snprintf(ipbuf, sizeof(ipbuf), "%s", inet_ntoa(sin.sin_addr));
+#else
+          fprintf(stderr, "interface lookup not enabled at compile time\n");
+          exit(1);
+#endif
+        }
+        else
+        {
+          snprintf(ipbuf, sizeof(ipbuf), "%s", address);
+        }
+
+        if(write_cache_file(cache_file, time(NULL), ipbuf) != 0)
+        {
+          exit(1);
+        }
+      }
+    }
+    else
+    {
+      fprintf(stderr, "no update needed at this time\n");
     }
   }
 
@@ -3059,6 +3588,7 @@ int main(int argc, char **argv)
 #endif
 
   if(address) { free(address); }
+  if(cache_file) { free(cache_file); }
   if(config_file) { free(config_file); }
   if(host) { free(host); }
   if(interface) { free(interface); }

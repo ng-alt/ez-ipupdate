@@ -10,6 +10,13 @@ This program has been tested under Linux and Solaris.
 
 See the file INSTALL for compilation and installation instructions.
 
-For more info check "http://www.gus.ml.org/proj/ez-ipupdate"
+For more info check "http://www.gusnet.cx/proj/ez-ipupdate"
+For user contributed documentation check
+"http://www.gusnet.cx/proj/ez-ipupdate/userdoc.php"
+
+INCOMPATIBILITIES
+  With version 2.9.2 the justlinux service became the name of the 
+  justlinux v2.0 service and pgpow is still the same old justlinux v1.0
+  service.
 
 Angus Mackay

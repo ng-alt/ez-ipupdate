@@ -2,7 +2,7 @@
 dnl Process this file with autoconf to produce a configure script.
 AC_INIT(ez-ipupdate.c)
 AM_CONFIG_HEADER(config.h)
-AM_INIT_AUTOMAKE(ez-ipupdate,2.9.1)
+AM_INIT_AUTOMAKE(ez-ipupdate,2.9.6)
 
 
 dnl Checks for programs.
@@ -91,7 +91,7 @@ case "$use_SERVICE" in
   ez-ip ) AC_DEFINE(DEF_SERVICE, EZIP_service);;
   pgpow ) AC_DEFINE(DEF_SERVICE, PGPOW_service);;
   penguinpowered ) AC_DEFINE(DEF_SERVICE, PGPOW_service);;
-  justlinux ) AC_DEFINE(DEF_SERVICE, PGPOW_service);;
+  justlinux ) AC_DEFINE(DEF_SERVICE, JUSTL_service);;
   dhs ) AC_DEFINE(DEF_SERVICE, DHS_service);;
   dyndns ) AC_DEFINE(DEF_SERVICE, DYNDNS_service);;
   dyndns-stat ) AC_DEFINE(DEF_SERVICE, DYNDNS_STAT_service);;
