@@ -1,17 +1,54 @@
 
 RCS file: /home/amackay/src/cvsroot/ez-ipupdate/ez-ipupdate.c,v
 Working file: ez-ipupdate.c
-head: 1.15
+head: 1.23
 branch:
 locks: strict
 access list:
 symbolic names:
+	release-2_6_0: 1.16
 	release-2_4_1b: 1.12
 	v0_9_0: 1.1.1.1
 	AMACKAY: 1.1.1
 keyword substitution: kv
-total revisions: 16;	selected revisions: 16
+total revisions: 24;	selected revisions: 24
 description:
+----------------------------
+revision 1.23
+date: 2000/08/22 17:23:16;  author: amackay;  state: Exp;  lines: +262 -83
+added support for easydns
+----------------------------
+revision 1.22
+date: 2000/08/18 16:03:16;  author: amackay;  state: Exp;  lines: +3 -3
+forgot to take out the mcheck() ing for non-debug releases.
+----------------------------
+revision 1.21
+date: 2000/08/03 02:22:32;  author: amackay;  state: Exp;  lines: +5 -6
+minor bugs, taking off the trailing slash for dyndns.
+----------------------------
+revision 1.20
+date: 2000/08/02 09:45:09;  author: amackay;  state: Exp;  lines: +454 -67
+merged in all of Jeremy Bopp's changes. these are a couple of bug fixes
+and support for tzo and gundip.
+also changed do_connect so that it closes fd if any errors.
+----------------------------
+revision 1.19
+date: 2000/08/02 09:42:38;  author: amackay;  state: Exp;  lines: +3 -3
+fixed un-noticeable bug
+----------------------------
+revision 1.18
+date: 2000/07/27 14:14:17;  author: amackay;  state: Exp;  lines: +30 -20
+fixed a big old bug in the max_interval stuff, thanks to Jasper for finding that one.
+fixed some stuff with running the command.
+----------------------------
+revision 1.17
+date: 2000/07/26 07:41:02;  author: amackay;  state: Exp;  lines: +179 -65
+added shell command execution and cleaned up some stuff that needed cleanin'
+----------------------------
+revision 1.16
+date: 2000/07/24 08:05:55;  author: amackay;  state: Exp;  lines: +6 -6
+version 2.6.0, this fixes the example file for dyndns to have the max-interval
+thing in there. also fixes where the sleep goes in dhs updates.
 ----------------------------
 revision 1.15
 date: 2000/07/12 07:43:23;  author: amackay;  state: Exp;  lines: +239 -16
