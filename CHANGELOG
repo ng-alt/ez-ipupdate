@@ -1,7 +1,7 @@
 
 RCS file: /home/amackay/src/cvsroot/ez-ipupdate/ez-ipupdate.c,v
 Working file: ez-ipupdate.c
-head: 1.31
+head: 1.44
 branch:
 locks: strict
 access list:
@@ -11,8 +11,69 @@ symbolic names:
 	v0_9_0: 1.1.1.1
 	AMACKAY: 1.1.1
 keyword substitution: kv
-total revisions: 32;	selected revisions: 32
+total revisions: 45;	selected revisions: 45
 description:
+----------------------------
+revision 1.44
+date: 2001/03/31 20:05:51;  author: amackay;  state: Exp;  lines: +11 -4
+better handeling of cache file errors.
+----------------------------
+revision 1.43
+date: 2001/03/23 08:46:43;  author: amackay;  state: Exp;  lines: +169 -6
+added contributed code for zoneedit service.
+----------------------------
+revision 1.42
+date: 2001/03/23 06:16:06;  author: amackay;  state: Exp;  lines: +129 -26
+added init() to services and added get_druation().
+----------------------------
+revision 1.41
+date: 2001/02/26 06:53:00;  author: amackay;  state: Exp;  lines: +44 -1
+added ip address taint checking for dyndns.org
+----------------------------
+revision 1.40
+date: 2000/12/17 22:52:20;  author: amackay;  state: Exp;  lines: +2 -2
+version 3.0.4, interface resolving now works for NetBSD too.
+----------------------------
+revision 1.39
+date: 2000/12/17 19:30:06;  author: amackay;  state: Exp;  lines: +4 -4
+fix for hn.org that cause the ip address to be ignored.
+----------------------------
+revision 1.38
+date: 2000/11/30 09:35:49;  author: amackay;  state: Exp;  lines: +41 -26
+fixed bug in the pidfile code and made IF_LOOKUP work for solaris.
+----------------------------
+revision 1.37
+date: 2000/11/29 20:27:26;  author: amackay;  state: Exp;  lines: +26 -3
+fixed some fgets() calls, fixed an include problem with cache_file.h and added
+example-dyns.conf to the dist.
+----------------------------
+revision 1.36
+date: 2000/11/24 23:14:33;  author: amackay;  state: Exp;  lines: +261 -34
+added support for hn.org and the use of a pid file.
+----------------------------
+revision 1.35
+date: 2000/11/18 23:04:21;  author: amackay;  state: Exp;  lines: +11 -10
+updated config files
+----------------------------
+revision 1.34
+date: 2000/11/18 22:35:32;  author: amackay;  state: Exp;  lines: +276 -365
+switched symantics so that you now must specify either an interface or an
+address for daemon mode. cleanup all the update functions and the check_info
+functions. fixed some bugs, fixed a MAJOR bug that I introduced in some time
+after 2.9.1 that caused daemon mode to not update properly (and get a lot of
+people banned, oops!). fixed the update code so that it is self throtlling
+(should have done that from the get go, espesially since adding the not
+updating properly in daemon mode bug).
+
+a major overhaul, thus -> 3.0.0
+----------------------------
+revision 1.33
+date: 2000/11/18 20:54:12;  author: amackay;  state: Exp;  lines: +21 -25
+pre manditory interface
+----------------------------
+revision 1.32
+date: 2000/11/17 11:34:46;  author: amackay;  state: Exp;  lines: +634 -206
+added support for dyns and fixed up stuff for dyndns
 ----------------------------
 revision 1.31
 date: 2000/10/31 05:51:51;  author: amackay;  state: Exp;  lines: +119 -28

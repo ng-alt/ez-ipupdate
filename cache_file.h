@@ -27,6 +27,10 @@
 #ifndef _CACHE_FILE_H
 #define _CACHE_FILE_H
 
+#if HAVE_SYS_TIME_H
+#  include <sys/time.h>
+#endif
+
 extern int read_cache_file(char *file, time_t *date, char **ipaddr);
 extern int write_cache_file(char *file, time_t date, char *ipaddr);
 

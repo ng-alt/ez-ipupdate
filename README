@@ -14,8 +14,13 @@ For more info check "http://www.gusnet.cx/proj/ez-ipupdate"
 For user contributed documentation check
 "http://www.gusnet.cx/proj/ez-ipupdate/userdoc.php"
 
+When setting it up please try to use daemon mode WITH A CACHE FILE!
+This will be much apreciated by all the people offering dynamic DNS services.
+
 INCOMPATIBILITIES
-  With version 2.9.2 the justlinux service became the name of the 
+ -With version 3.0.0 you must specify a service-type (no more default to
+ ez-ip.net) and you must specify an interface (no more default to eth0)
+ -With version 2.9.2 the justlinux service became the name of the 
   justlinux v2.0 service and pgpow is still the same old justlinux v1.0
   service.
 

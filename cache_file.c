@@ -32,6 +32,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#if HAVE_SYS_STAT_H
+#  include <sys/stat.h>
+#endif
+#if HAVE_ERRNO_H
+#  include <errno.h>
+#endif
 
 #include <cache_file.h>
 
@@ -77,15 +84,31 @@ int read_cache_file(char *file, time_t *date, char **ipaddr)
   char *p;
   char *datestr;
   char *ipstr;
+#if HAVE_STAT
+  struct stat st;
+#endif
 
   // safety first
   buf[BUFSIZ] = '\0';
 
+  // indicate failure
+  *date = 0;
+  *ipaddr = NULL;
+
+#if HAVE_STAT
+  if(stat(file, &st) != 0)
+  {
+    if(errno == ENOENT)
+    {
+      return(0);
+    }
+    return(-1);
+  }
+#endif
+
   if((fp=fopen(file, "r")) == NULL)
   {
-    *date = 0;
-    *ipaddr = NULL;
-    return(0);
+    return(-1);
   }
 
   if(fgets(buf, BUFSIZ, fp) != NULL)
@@ -136,7 +159,6 @@ int write_cache_file(char *file, time_t date, char *ipaddr)
 
   if((fp=fopen(file, "w")) == NULL)
   {
-    fprintf(stderr, "could not open cache file \"%s\": %s\n", file, error_string);
     return(-1);
   }
 
