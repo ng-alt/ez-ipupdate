@@ -1,0 +1,12 @@
+"ez-ipupdate"
+
+Ez-ipupdate is a client for the dynamic IP service offered by 
+http://www.ez-ip.net.
+
+It has several options and is quite complete. It is written in pure
+C and supports a daemon mode (Linux only right now).
+
+This program has been tested under Linux and Solaris.
+
+See the file INSTALL for compilation and installation instructions.
+
