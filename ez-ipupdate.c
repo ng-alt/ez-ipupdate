@@ -34,11 +34,17 @@
  * 
  */
 
-#define DEFAULT_SERVER "www.EZ-IP.Net"
-#define DEFAULT_PORT "80"
-#define REQUEST "/members/update/"
+#define EZIP_DEFAULT_SERVER "www.EZ-IP.Net"
+#define EZIP_DEFAULT_PORT "80"
+#define EZIP_REQUEST "/members/update/"
+
+#define PGPOW_DEFAULT_SERVER "www.penguinpowered.com"
+#define PGPOW_DEFAULT_PORT "2345"
+#define PGPOW_REQUEST "update"
+#define PGPOW_VERSION "1.0"
+
 #define DEFAULT_TIMEOUT 120
-#define DEFAULT_UPDATE_PERIOD 1800
+#define DEFAULT_UPDATE_PERIOD 600
 #if __linux__
 #  define DEFAULT_IF "eth0"
 #elif __OpenBSD__
@@ -47,7 +53,7 @@
 #  define DEFAULT_IF "eth0"
 #endif
 
-#define BUFFER_SIZE 2048
+#define BUFFER_SIZE 2047
 
 #ifdef HAVE_CONFIG_H
 #  include <config.h>
@@ -98,11 +104,7 @@ extern int errno;
 
 
 
-#if __linux__
-#  define IF_LOOKUP 1
-#  include <sys/ioctl.h>
-#  include <net/if.h>
-#elif __OpenBSD__
+#if __linux__ || __OpenBSD__
 #  define IF_LOOKUP 1
 #  include <sys/ioctl.h>
 #  include <net/if.h>
@@ -140,12 +142,33 @@ extern int errno;
 
 /**************************************************/
 
+enum {
+  SERV_EZIP,
+  SERV_PGPOW
+};
+
+struct service_t
+{
+  int type;
+  char *name;
+  int (*update_entry)(void);
+  int (*check_info)(void);
+  char **fields_used;
+  char *default_server;
+  char *default_port;
+  char *default_request;
+};
+
+/**************************************************/
+
 static char *program_name = NULL;
 static char *config_file = NULL;
 static char *server = NULL;
 static char *port = NULL;
 static char user[256];
 static char auth[512];
+static char user_name[128];
+static char password[128];
 static char *address = NULL;
 static char *request = NULL;
 static char *wildcard = NULL;
@@ -155,10 +178,43 @@ static char *host = NULL;
 static char *interface = NULL;
 static int ntrys = 1;
 static int update_period = DEFAULT_UPDATE_PERIOD;
+static int resolv_period = DEFAULT_UPDATE_PERIOD/10;
 static struct timeval timeout;
 
 static volatile int client_sockfd;
 static volatile int last_sig = 0;
+
+/* service objects for various services */
+int EZIP_update_entry(void);
+int EZIP_check_info(void);
+static char *EZIP_fields_used[] = { "server", "user", "address", "wildcard", "mx", "url", "host" };
+static struct service_t EZIP_service = {
+  SERV_EZIP,
+  "ez-ip",
+  EZIP_update_entry,
+  EZIP_check_info,
+  EZIP_fields_used,
+  EZIP_DEFAULT_SERVER,
+  EZIP_DEFAULT_PORT,
+  EZIP_REQUEST
+};
+
+int PGPOW_update_entry(void);
+int PGPOW_check_info(void);
+static char *PGPOW_fields_used[] = { "server", "host" };
+static struct service_t PGPOW_service = {
+  SERV_PGPOW,
+  "penguinpowered",
+  PGPOW_update_entry,
+  PGPOW_check_info,
+  PGPOW_fields_used,
+  PGPOW_DEFAULT_SERVER,
+  PGPOW_DEFAULT_PORT,
+  PGPOW_REQUEST
+};
+
+/* default to EZIP for historical reasons */
+static struct service_t *service = &EZIP_service;
 
 int options;
 
@@ -169,6 +225,7 @@ int options;
 
 enum { 
   CMD__start = 1,
+  CMD_service_type,
   CMD_server,
   CMD_user,
   CMD_address,
@@ -178,6 +235,7 @@ enum {
   CMD_host,
   CMD_interface,
   CMD_retrys,
+  CMD_resolv_period,
   CMD_period,
   CMD_daemon,
   CMD_debug,
@@ -199,7 +257,9 @@ static struct conf_cmd conf_commands[] = {
   { CMD_mx,            "mx",            CONF_NEED_ARG, 1, conf_handler, "%s=<mail exchanger>" },
   { CMD_retrys,        "retrys",        CONF_NEED_ARG, 1, conf_handler, "%s=<number of trys>" },
   { CMD_server,        "server",        CONF_NEED_ARG, 1, conf_handler, "%s=<server name>" },
+  { CMD_service_type,  "service-type",  CONF_NEED_ARG, 1, conf_handler, "%s=<ezip|pgpower>" },
   { CMD_timeout,       "timeout",       CONF_NEED_ARG, 1, conf_handler, "%s=<sec.millisec>" },
+  { CMD_resolv_period, "resolv-period", CONF_NEED_ARG, 1, conf_handler, "%s=<time between failed resolve attempts>" },
   { CMD_period,        "period",        CONF_NEED_ARG, 1, conf_handler, "%s=<time between update attempts>" },
   { CMD_url,           "url",           CONF_NEED_ARG, 1, conf_handler, "%s=<url>" },
   { CMD_user,          "user",          CONF_NEED_ARG, 1, conf_handler, "%s=<user name>[:password]" },
@@ -226,7 +286,7 @@ void print_useage( void )
   fprintf(stdout, "%s [options] \n\n", program_name);
   fprintf(stdout, " Options are:\n");
   fprintf(stdout, "  -a, --address <ip address>\tstring to send as your ip address\n");
-  fprintf(stdout, "  -c, --config_file <file>\tconfiguration file, almost all arguments can be\n");
+  fprintf(stdout, "  -c, --config-file <file>\tconfiguration file, almost all arguments can be\n");
   fprintf(stdout, "\t\t\t\tgiven with: <name>[=<value>]\n\t\t\t\tto see a list of possible config commands\n");
   fprintf(stdout, "\t\t\t\ttry \"echo help | %s -c -\"\n", program_name);
   fprintf(stdout, "  -d, --daemon\t\t\trun as a daemon periodicly updating if necessary\n");
@@ -241,6 +301,7 @@ void print_useage( void )
   fprintf(stdout, "  -r, --retrys <num>\t\tnumber of trys (default: 1)\n");
   fprintf(stdout, "  -R, --run-as-user <user>\tchange to <user> for running, be ware\n\t\t\t\tthat this can cause problems with handeling\n\t\t\t\tSIGHUP properly if that user can't read the\n\t\t\t\tconfig file\n");
   fprintf(stdout, "  -s, --server <server[:port]>\tthe server to connect to\n");
+  fprintf(stdout, "  -S, --service-type <server>\tthe type of service that you are using\n");
   fprintf(stdout, "  -t, --timeout <sec.millisec>\tthe amount of time to wait on I/O\n");
   fprintf(stdout, "  -U, --url <url>\t\tstring to send as the url parameter\n");
   fprintf(stdout, "  -u, --user <user[:passwd]>\tuser ID and password, if either is left blank \n\t\t\t\tthey will be prompted for\n");
@@ -253,7 +314,7 @@ void print_useage( void )
 
 void print_version( void )
 {
-  fprintf(stdout, "%s: - %s - $Id: ez-ipupdate.c,v 1.4 1999/04/21 03:12:26 amackay Exp $\n", program_name, VERSION);
+  fprintf(stdout, "%s: - %s - $Id: ez-ipupdate.c,v 1.6 1999/07/13 05:44:46 amackay Exp $\n", program_name, VERSION);
 }
 
 void print_credits( void )
@@ -335,6 +396,11 @@ int option_handler(int id, char *optarg)
       dprintf((stderr, "update_period: %d\n", update_period));
       break;
 
+    case CMD_resolv_period:
+      resolv_period = atoi(optarg);
+      dprintf((stderr, "resolv_period: %d\n", resolv_period));
+      break;
+
     case CMD_quiet:
       options |= OPT_QUIET;
       dprintf((stderr, "quiet mode\n"));
@@ -357,6 +423,22 @@ int option_handler(int id, char *optarg)
       }
       dprintf((stderr, "server: %s\n", server));
       dprintf((stderr, "port: %s\n", port));
+      break;
+
+    case CMD_service_type:
+      if(strcmp("ezip", optarg) == 0)
+      {
+        service = &EZIP_service;
+      }
+      else if(strcmp("pgpow", optarg) == 0 || strcmp("penguinpowered", optarg) == 0)
+      {
+        service = &PGPOW_service;
+      }
+      else
+      {
+        fprintf(stderr, "unknown service type: %s\n", optarg);
+      }
+      dprintf((stderr, "service_type: %s\n", service->name));
       break;
 
     case CMD_user:
@@ -440,17 +522,20 @@ void parse_args( int argc, char **argv )
   struct option long_options[] = {
       {"address",       required_argument,      0, 'a'},
       {"config_file",   required_argument,      0, 'c'},
+      {"config-file",   required_argument,      0, 'c'},
       {"daemon",        no_argument,            0, 'd'},
       {"debug",         no_argument,            0, 'D'},
       {"foreground",    no_argument,            0, 'f'},
       {"host",          required_argument,      0, 'h'},
       {"interface",     required_argument,      0, 'i'},
       {"mx",            required_argument,      0, 'm'},
+      {"resolv-period", required_argument,      0, 'p'},
       {"period",        required_argument,      0, 'P'},
       {"quiet",         no_argument,            0, 'q'},
       {"retrys",        required_argument,      0, 'r'},
       {"run-as-user",   required_argument,      0, 'R'},
       {"server",        required_argument,      0, 's'},
+      {"service-type",  required_argument,      0, 'S'},
       {"timeout",       required_argument,      0, 't'},
       {"url",           required_argument,      0, 'U'},
       {"user",          required_argument,      0, 'u'},
@@ -465,7 +550,7 @@ void parse_args( int argc, char **argv )
 #endif
   int opt;
 
-  while((opt=xgetopt(argc, argv, "a:c:dDfh:i:m:P:qr:R:s:t:U:u:wHVC", 
+  while((opt=xgetopt(argc, argv, "a:c:dDfh:i:m:p:P:qr:R:s:S:t:U:u:wHVC", 
           long_options, NULL)) != -1)
   {
     switch (opt)
@@ -512,6 +597,10 @@ void parse_args( int argc, char **argv )
         option_handler(CMD_mx, optarg);
         break;
 
+      case 'p':
+        option_handler(CMD_resolv_period, optarg);
+        break;
+
       case 'P':
         option_handler(CMD_period, optarg);
         break;
@@ -530,6 +619,10 @@ void parse_args( int argc, char **argv )
 
       case 's':
         option_handler(CMD_server, optarg);
+        break;
+
+      case 'S':
+        option_handler(CMD_service_type, optarg);
         break;
 
       case 't':
@@ -701,6 +794,8 @@ void output(void *buf)
   struct timeval tv;
   int ret;
 
+  dprintf((stderr, "I say: %s\n", (char *)buf));
+
   // set up our fdset and timeout
   FD_ZERO(&writefds);
   FD_SET(client_sockfd, &writefds);
@@ -811,20 +906,27 @@ int get_if_addr(int sock, char *name, struct sockaddr_in *sin)
   else
   {
     memset(sin, 0, sizeof(struct sockaddr_in));
-    dprintf((stderr, "%s: %s\n", name, "could not resolve"));
+    dprintf((stderr, "%s: %s\n", name, "could not resolve interface"));
     return -1;
   }
   return -1;
 }
 #endif
 
-int update_entry(void)
+int EZIP_check_info(void)
 {
-  char buf[BUFFER_SIZE];
+  return 0;
+}
+
+int EZIP_update_entry(void)
+{
+  char buf[BUFFER_SIZE+1];
   char *bp = buf;
   int bytes;
   int btot;
   int ret;
+
+  buf[BUFFER_SIZE] = '\0';
 
   if(do_connect((int*)&client_sockfd, server, port) != 0)
   {
@@ -920,6 +1022,241 @@ int update_entry(void)
   return 0;
 }
 
+static int read_response(char *buf)
+{
+  int bytes; 
+
+  bytes = read_input(buf, BUFFER_SIZE);
+  if(bytes < 1)
+  {
+    close(client_sockfd);
+    return(-1);
+  }
+  buf[bytes] = '\0';
+
+  dprintf((stderr, "server says: %s\n", buf));
+  
+  if(strncmp("OK", buf, 2) != 0)
+  {
+    return(1);
+  }
+  else
+  {
+    return(0);
+  }
+}
+
+int PGPOW_check_info(void)
+{
+  char buf[BUFSIZ+1];
+
+  if(host == NULL)
+  {
+    printf("host: ");
+    fgets(buf, BUFSIZ, stdin);
+    host = strdup(buf);
+  }
+
+  return 0;
+}
+
+int PGPOW_update_entry(void)
+{
+  char buf[BUFFER_SIZE+1];
+
+  buf[BUFFER_SIZE] = '\0';
+
+  // make sure that we can get our own ip address first
+  if(strcmp("update", request) == 0)
+  {
+    if((options & OPT_DAEMON) || address == NULL || *address == '\0')
+    {
+#ifdef IF_LOOKUP
+      struct sockaddr_in sin;
+      int sock;
+#endif
+
+      if(address) { free(address); address = NULL; }
+
+#ifdef IF_LOOKUP
+      sock = socket(AF_INET, SOCK_STREAM, 0);
+      if(get_if_addr(sock, interface, &sin) == 0)
+      {
+        if(address) { free(address); }
+        address = strdup(inet_ntoa(sin.sin_addr)),
+        close(sock);
+      }
+      else
+      {
+        fprintf(stderr, "could not resolve ip address.\n");
+        close(sock);
+        return(-1);
+      }
+#else
+      printf("ip address: ");
+      fgets(buf, BUFSIZ, stdin);
+      address = strdup(buf);
+#endif
+    }
+  }
+
+  if(do_connect((int*)&client_sockfd, server, port) != 0)
+  {
+    if(!(options & OPT_QUIET))
+    {
+      fprintf(stderr, "error connecting to %s:%s\n", server, port);
+    }
+    close(client_sockfd);
+    return(-1);
+  }
+
+  /* read server message */
+  if(read_response(buf) != 0)
+  {
+    fprintf(stderr, "strange server response, are you connecting to the right server?\n");
+    close(client_sockfd);
+    return(-1);
+  }
+
+  /* send version command */
+  snprint(buf, BUFFER_SIZE, "VER %s [%s-%s %s (%s)]\015\012", PGPOW_VERSION,
+      "ez-update", VERSION, OS, "by Angus Mackay");
+  output(buf);
+
+  if(read_response(buf) != 0)
+  {
+    if(strncmp("ERR", buf, 3) == 0)
+    {
+      fprintf(stderr, "error talking to server: %s\n", &(buf[3]));
+    }
+    else
+    {
+      fprintf(stderr, "error talking to server:\n\t%s\n", buf);
+    }
+    close(client_sockfd);
+    return(-1);
+  }
+
+  /* send user command */
+  snprint(buf, BUFFER_SIZE, "USER %s\015\012", user_name);
+  output(buf);
+
+  if(read_response(buf) != 0)
+  {
+    if(strncmp("ERR", buf, 3) == 0)
+    {
+      fprintf(stderr, "error talking to server: %s\n", &(buf[3]));
+    }
+    else
+    {
+      fprintf(stderr, "error talking to server:\n\t%s\n", buf);
+    }
+    close(client_sockfd);
+    return(-1);
+  }
+
+  /* send pass command */
+  snprint(buf, BUFFER_SIZE, "PASS %s\015\012", password);
+  output(buf);
+
+  if(read_response(buf) != 0)
+  {
+    if(strncmp("ERR", buf, 3) == 0)
+    {
+      fprintf(stderr, "error talking to server: %s\n", &(buf[3]));
+    }
+    else
+    {
+      fprintf(stderr, "error talking to server:\n\t%s\n", buf);
+    }
+    close(client_sockfd);
+    return(-1);
+  }
+
+  /* send host command */
+  snprint(buf, BUFFER_SIZE, "HOST %s\015\012", host);
+  output(buf);
+
+  if(read_response(buf) != 0)
+  {
+    if(strncmp("ERR", buf, 3) == 0)
+    {
+      fprintf(stderr, "error talking to server: %s\n", &(buf[3]));
+    }
+    else
+    {
+      fprintf(stderr, "error talking to server:\n\t%s\n", buf);
+    }
+    close(client_sockfd);
+    return(-1);
+  }
+
+  /* send oper command */
+  snprint(buf, BUFFER_SIZE, "OPER %s\015\012", request);
+  output(buf);
+
+  if(read_response(buf) != 0)
+  {
+    if(strncmp("ERR", buf, 3) == 0)
+    {
+      fprintf(stderr, "error talking to server: %s\n", &(buf[3]));
+    }
+    else
+    {
+      fprintf(stderr, "error talking to server:\n\t%s\n", buf);
+    }
+    close(client_sockfd);
+    return(-1);
+  }
+
+  if(strcmp("update", request) == 0)
+  {
+    /* send ip command */
+    snprint(buf, BUFFER_SIZE, "IP %s\015\012", address);
+    output(buf);
+
+    if(read_response(buf) != 0)
+    {
+      if(strncmp("ERR", buf, 3) == 0)
+      {
+        fprintf(stderr, "error talking to server: %s\n", &(buf[3]));
+      }
+      else
+      {
+        fprintf(stderr, "error talking to server:\n\t%s\n", buf);
+      }
+      close(client_sockfd);
+      return(-1);
+    }
+  }
+
+  /* send done command */
+  snprint(buf, BUFFER_SIZE, "DONE\015\012");
+  output(buf);
+
+  if(read_response(buf) != 0)
+  {
+    if(strncmp("ERR", buf, 3) == 0)
+    {
+      fprintf(stderr, "error talking to server: %s\n", &(buf[3]));
+    }
+    else
+    {
+      fprintf(stderr, "error talking to server:\n\t%s\n", buf);
+    }
+    close(client_sockfd);
+    return(-1);
+  }
+
+  if(!(options & OPT_QUIET))
+  {
+    printf("request successful\n");
+  }
+
+  close(client_sockfd);
+  return 0;
+}
+
 void handle_sig(int sig)
 {
   switch(sig)
@@ -964,14 +1301,16 @@ void handle_sig(int sig)
 
 int main( int argc, char **argv )
 {
-  char user_name[128];
-  char password[128];
   int ifresolve_warned = 0;
   int i;
 #ifdef IF_LOOKUP
   int sock = -1;
   struct sockaddr_in sin;
   struct sockaddr_in sin2;
+#endif
+
+#ifdef __GNUC__
+  mcheck(NULL);
 #endif
 
   dprintf((stderr, "staring...\n"));
@@ -1016,11 +1355,11 @@ int main( int argc, char **argv )
 
   if(server == NULL)
   {
-    server = strdup(DEFAULT_SERVER);
+    server = strdup(service->default_server);
   }
   if(port == NULL)
   {
-    port = strdup(DEFAULT_PORT);
+    port = strdup(service->default_port);
   }
 
   *user_name = '\0';
@@ -1045,9 +1384,15 @@ int main( int argc, char **argv )
 
   base64Encode(user, auth);
 
-  request = strdup(REQUEST);
+  request = strdup(service->default_request);
 
   if(interface == NULL) { interface = strdup(DEFAULT_IF); }
+
+  if(service->check_info() != 0)
+  {
+    fprintf(stderr, "invalid data to perform requested action.");
+    exit(1);
+  }
 
   if(address == NULL) { address = strdup(""); }
   if(wildcard == NULL) { wildcard = strdup("no"); }
@@ -1096,7 +1441,7 @@ int main( int argc, char **argv )
         {
           memcpy(&sin, &sin2, sizeof(sin));
 
-          if(update_entry() == 0)
+          if(service->update_entry() == 0)
           {
 #  if HAVE_SYSLOG_H
             syslog(LOG_NOTICE, "successful update for %s->%s\n",
@@ -1118,6 +1463,7 @@ int main( int argc, char **argv )
             memset(&sin, 0, sizeof(sin));
           }
         }
+        sleep(update_period);
       }
       else
       {
@@ -1132,8 +1478,8 @@ int main( int argc, char **argv )
               interface);
 #  endif
         }
+        sleep(resolv_period);
       }
-      sleep(update_period);
     }
 #else
     fprintf(stderr, "sorry, this mode is only available on platforms that the ");
@@ -1146,14 +1492,17 @@ int main( int argc, char **argv )
   {
     for(i=0; i<ntrys; i++)
     {
-      if(update_entry() == 0)
+      if(service->update_entry() == 0)
       {
         break;
       }
-      if(i+1 != ntrys) { sleep(1); }
+      if(i+1 != ntrys) { sleep(5); }
     }
-    return 1;
   }
+
+#ifdef IF_LOOKUP
+  if(sock > 0) { close(sock); }
+#endif
 
   if(address) { free(address); }
   if(config_file) { free(config_file); }

@@ -173,6 +173,13 @@ int parse_conf_file(char *fname, struct conf_cmd *commands)
     cmd->proc(cmd, arg);
   }
 
+  if(using_a_file)
+  {
+    if(in)
+    {
+      fclose(in);
+    }
+  }
   return 0;
 
 ERR:
