@@ -57,6 +57,10 @@
 #define DYNDNS_REQUEST "/nic/dyndns/"
 #define DYNDNS_STAT_REQUEST "/nic/statdns/"
 
+#define ODS_DEFAULT_SERVER "update.ods.org"
+#define ODS_DEFAULT_PORT "7070"
+#define ODS_REQUEST "update"
+
 #define DEFAULT_TIMEOUT 120
 #define DEFAULT_UPDATE_PERIOD 600
 #if __linux__
@@ -161,7 +165,8 @@ enum {
   SERV_PGPOW,
   SERV_DHS,
   SERV_DYNDNS,
-  SERV_DYNDNS_STAT
+  SERV_DYNDNS_STAT,
+  SERV_ODS
 };
 
 struct service_t
@@ -221,7 +226,7 @@ static struct service_t EZIP_service = {
 
 int PGPOW_update_entry(void);
 int PGPOW_check_info(void);
-static char *PGPOW_fields_used[] = { "server", "host" };
+static char *PGPOW_fields_used[] = { "server", "host", NULL };
 static struct service_t PGPOW_service = {
   SERV_PGPOW,
   "justlinux (penguinpowered)",
@@ -235,7 +240,7 @@ static struct service_t PGPOW_service = {
 
 int DHS_update_entry(void);
 int DHS_check_info(void);
-static char *DHS_fields_used[] = { "server", "user", "address", "wildcard", "mx", "url", "host" };
+static char *DHS_fields_used[] = { "server", "user", "address", "wildcard", "mx", "url", "host", NULL };
 static struct service_t DHS_service = {
   SERV_DHS,
   "ez-ip",
@@ -249,7 +254,7 @@ static struct service_t DHS_service = {
 
 int DYNDNS_update_entry(void);
 int DYNDNS_check_info(void);
-static char *DYNDNS_fields_used[] = { "server", "user", "address", "wildcard", "mx", "host" };
+static char *DYNDNS_fields_used[] = { "server", "user", "address", "wildcard", "mx", "host", NULL };
 static struct service_t DYNDNS_service = {
   SERV_DYNDNS,
   "dyndns",
@@ -263,7 +268,7 @@ static struct service_t DYNDNS_service = {
 
 int DYNDNS_STAT_update_entry(void);
 int DYNDNS_STAT_check_info(void);
-static char *DYNDNS_STAT_fields_used[] = { "server", "user", "address", "wildcard", "mx", "host" };
+static char *DYNDNS_STAT_fields_used[] = { "server", "user", "address", "wildcard", "mx", "host", NULL };
 static struct service_t DYNDNS_STAT_service = {
   SERV_DYNDNS_STAT,
   "dyndns-static",
@@ -273,6 +278,20 @@ static struct service_t DYNDNS_STAT_service = {
   DYNDNS_DEFAULT_SERVER,
   DYNDNS_DEFAULT_PORT,
   DYNDNS_STAT_REQUEST
+};
+
+int ODS_update_entry(void);
+int ODS_check_info(void);
+static char *ODS_fields_used[] = { "server", "host", "address", NULL };
+static struct service_t ODS_service = {
+  SERV_ODS,
+  "justlinux (penguinpowered)",
+  ODS_update_entry,
+  ODS_check_info,
+  ODS_fields_used,
+  ODS_DEFAULT_SERVER,
+  ODS_DEFAULT_PORT,
+  ODS_REQUEST
 };
 
 /* default to EZIP for historical reasons */
@@ -343,6 +362,7 @@ void parse_args( int argc, char **argv );
 int do_connect(int *sock, char *host, char *port);
 void base64Encode(char *intext, char *output);
 int main( int argc, char **argv );
+void warn_fields(char **okay_fields);
 
 /**************************************************/
 
@@ -372,6 +392,8 @@ void print_usage( void )
   fprintf(stdout, "  -R, --run-as-user <user>\tchange to <user> for running, be ware\n\t\t\t\tthat this can cause problems with handeling\n\t\t\t\tSIGHUP properly if that user can't read the\n\t\t\t\tconfig file\n");
   fprintf(stdout, "  -s, --server <server[:port]>\tthe server to connect to\n");
   fprintf(stdout, "  -S, --service-type <server>\tthe type of service that you are using\n");
+  fprintf(stdout, "\t\t\t\ttry one of: ezip, pgpow, dhs, dyndns\n");
+  fprintf(stdout, "\t\t\t\tdyndns-static, ods\n");
   fprintf(stdout, "  -t, --timeout <sec.millisec>\tthe amount of time to wait on I/O\n");
   fprintf(stdout, "  -U, --url <url>\t\tstring to send as the url parameter\n");
   fprintf(stdout, "  -u, --user <user[:passwd]>\tuser ID and password, if either is left blank \n\t\t\t\tthey will be prompted for\n");
@@ -384,7 +406,7 @@ void print_usage( void )
 
 void print_version( void )
 {
-  fprintf(stdout, "%s: - %s - $Id: ez-ipupdate.c,v 1.13 2000/04/20 06:59:07 amackay Exp $\n", program_name, VERSION);
+  fprintf(stdout, "%s: - %s - $Id: ez-ipupdate.c,v 1.15 2000/07/12 07:43:23 amackay Exp $\n", program_name, VERSION);
 }
 
 void print_credits( void )
@@ -524,10 +546,14 @@ int option_handler(int id, char *optarg)
       {
         service = &DYNDNS_STAT_service;
       }
+      else if(strcmp("ods", optarg) == 0)
+      {
+        service = &ODS_service;
+      }
       else
       {
         fprintf(stderr, "unknown service type: %s\n", optarg);
-        fprintf(stderr, "try one of: ezip, pgpow, dhs, dyndns, dyndns-static\n");
+        fprintf(stderr, "try one of: ezip, pgpow, dhs, dyndns, dyndns-static, ods\n");
         exit(1);
       }
       service_set = 1;
@@ -1020,7 +1046,7 @@ int get_if_addr(int sock, char *name, struct sockaddr_in *sin)
 }
 #endif
 
-static int read_response(char *buf)
+static int PGPOW_read_response(char *buf)
 {
   int bytes; 
 
@@ -1044,6 +1070,23 @@ static int read_response(char *buf)
   }
 }
 
+static int ODS_read_response(char *buf)
+{
+  int bytes; 
+
+  bytes = read_input(buf, BUFFER_SIZE);
+  if(bytes < 1)
+  {
+    close(client_sockfd);
+    return(-1);
+  }
+  buf[bytes] = '\0';
+
+  dprintf((stderr, "server says: %s\n", buf));
+  
+  return(atoi(buf));
+}
+
 int PGPOW_check_info(void)
 {
   char buf[BUFSIZ+1];
@@ -1055,11 +1098,31 @@ int PGPOW_check_info(void)
     host = strdup(buf);
   }
 
+  warn_fields(service->fields_used);
+
   return 0;
 }
 
 int EZIP_check_info(void)
 {
+  warn_fields(service->fields_used);
+
+  return 0;
+}
+
+int ODS_check_info(void)
+{
+  char buf[BUFSIZ+1];
+
+  if(host == NULL)
+  {
+    printf("host: ");
+    fgets(buf, BUFSIZ, stdin);
+    host = strdup(buf);
+  }
+
+  warn_fields(service->fields_used);
+
   return 0;
 }
 
@@ -1169,6 +1232,8 @@ int EZIP_update_entry(void)
 
 int DYNDNS_check_info(void)
 {
+  warn_fields(service->fields_used);
+
   return 0;
 }
 
@@ -1372,7 +1437,7 @@ int PGPOW_update_entry(void)
   }
 
   /* read server message */
-  if(read_response(buf) != 0)
+  if(PGPOW_read_response(buf) != 0)
   {
     fprintf(stderr, "strange server response, are you connecting to the right server?\n");
     close(client_sockfd);
@@ -1384,7 +1449,7 @@ int PGPOW_update_entry(void)
       "ez-update", VERSION, OS, "by Angus Mackay");
   output(buf);
 
-  if(read_response(buf) != 0)
+  if(PGPOW_read_response(buf) != 0)
   {
     if(strncmp("ERR", buf, 3) == 0)
     {
@@ -1402,7 +1467,7 @@ int PGPOW_update_entry(void)
   snprint(buf, BUFFER_SIZE, "USER %s\015\012", user_name);
   output(buf);
 
-  if(read_response(buf) != 0)
+  if(PGPOW_read_response(buf) != 0)
   {
     if(strncmp("ERR", buf, 3) == 0)
     {
@@ -1420,7 +1485,7 @@ int PGPOW_update_entry(void)
   snprint(buf, BUFFER_SIZE, "PASS %s\015\012", password);
   output(buf);
 
-  if(read_response(buf) != 0)
+  if(PGPOW_read_response(buf) != 0)
   {
     if(strncmp("ERR", buf, 3) == 0)
     {
@@ -1438,7 +1503,7 @@ int PGPOW_update_entry(void)
   snprint(buf, BUFFER_SIZE, "HOST %s\015\012", host);
   output(buf);
 
-  if(read_response(buf) != 0)
+  if(PGPOW_read_response(buf) != 0)
   {
     if(strncmp("ERR", buf, 3) == 0)
     {
@@ -1456,7 +1521,7 @@ int PGPOW_update_entry(void)
   snprint(buf, BUFFER_SIZE, "OPER %s\015\012", request);
   output(buf);
 
-  if(read_response(buf) != 0)
+  if(PGPOW_read_response(buf) != 0)
   {
     if(strncmp("ERR", buf, 3) == 0)
     {
@@ -1476,7 +1541,7 @@ int PGPOW_update_entry(void)
     snprint(buf, BUFFER_SIZE, "IP %s\015\012", address);
     output(buf);
 
-    if(read_response(buf) != 0)
+    if(PGPOW_read_response(buf) != 0)
     {
       if(strncmp("ERR", buf, 3) == 0)
       {
@@ -1495,7 +1560,7 @@ int PGPOW_update_entry(void)
   snprint(buf, BUFFER_SIZE, "DONE\015\012");
   output(buf);
 
-  if(read_response(buf) != 0)
+  if(PGPOW_read_response(buf) != 0)
   {
     if(strncmp("ERR", buf, 3) == 0)
     {
@@ -1520,6 +1585,8 @@ int PGPOW_update_entry(void)
 
 int DHS_check_info(void)
 {
+  warn_fields(service->fields_used);
+
   return 0;
 }
 
@@ -1735,15 +1802,15 @@ int DHS_update_entry(void)
       break;
   }
 
-  // okay, dhs's service is incredibly stupid and will not work with two
-  // requests right after each other. I could care less that this is ugly,
-  // I personally will NEVER use dhs, it is laughable.
-  sleep(DHS_SUCKY_TIMEOUT < timeout.tv_sec ? DHS_SUCKY_TIMEOUT : timeout.tv_sec);
-
   // this stupid service requires us to do seperate request if we want to 
   // update the mail exchanger (mx). grrrrrr
   if(*mx != '\0')
   {
+    // okay, dhs's service is incredibly stupid and will not work with two
+    // requests right after each other. I could care less that this is ugly,
+    // I personally will NEVER use dhs, it is laughable.
+    sleep(DHS_SUCKY_TIMEOUT < timeout.tv_sec ? DHS_SUCKY_TIMEOUT : timeout.tv_sec);
+
     if(do_connect((int*)&client_sockfd, server, port) != 0)
     {
       if(!(options & OPT_QUIET))
@@ -1877,6 +1944,162 @@ int DHS_update_entry(void)
   return(retval);
 }
 
+int ODS_update_entry(void)
+{
+  char buf[BUFFER_SIZE+1];
+  int response;
+
+  buf[BUFFER_SIZE] = '\0';
+
+  // make sure that we can get our own ip address first
+  if(strcmp("update", request) == 0)
+  {
+    if((options & OPT_DAEMON) || address == NULL || *address == '\0')
+    {
+#ifdef IF_LOOKUP
+      struct sockaddr_in sin;
+      int sock;
+#endif
+
+      if(address) { free(address); address = NULL; }
+
+#ifdef IF_LOOKUP
+      sock = socket(AF_INET, SOCK_STREAM, 0);
+      if(get_if_addr(sock, interface, &sin) == 0)
+      {
+        if(address) { free(address); }
+        address = strdup(inet_ntoa(sin.sin_addr)),
+        close(sock);
+      }
+      else
+      {
+        fprintf(stderr, "could not resolve ip address.\n");
+        close(sock);
+        return(-1);
+      }
+      close(sock);
+#else
+      printf("ip address: ");
+      fgets(buf, BUFSIZ, stdin);
+      address = strdup(buf);
+#endif
+    }
+  }
+
+  if(do_connect((int*)&client_sockfd, server, port) != 0)
+  {
+    if(!(options & OPT_QUIET))
+    {
+      fprintf(stderr, "error connecting to %s:%s\n", server, port);
+    }
+    close(client_sockfd);
+    return(-1);
+  }
+
+  /* read server message */
+  if(ODS_read_response(buf) != 100)
+  {
+    fprintf(stderr, "strange server response, are you connecting to the right server?\n");
+    close(client_sockfd);
+    return(-1);
+  }
+
+  /* send login command */
+  snprint(buf, BUFFER_SIZE, "LOGIN %s %s\012", user_name, password);
+  output(buf);
+
+  response = ODS_read_response(buf);
+  if(!(response == 225 || response == 226))
+  {
+    if(strlen(buf) > 4)
+    {
+      fprintf(stderr, "error talking to server: %s\n", &(buf[4]));
+    }
+    else
+    {
+      fprintf(stderr, "error talking to server\n");
+    }
+    close(client_sockfd);
+    return(-1);
+  }
+
+  /* send delete command */
+  snprint(buf, BUFFER_SIZE, "DELRR %s A\012", host);
+  output(buf);
+
+  if(ODS_read_response(buf) != 0)
+  {
+    // what is the correct response to a DELRR?
+  }
+
+  /* send address command */
+  snprint(buf, BUFFER_SIZE, "ADDRR %s A %s\012", host, address);
+  output(buf);
+
+  response = ODS_read_response(buf);
+  if(!(response == 795 || response == 796))
+  {
+    if(strlen(buf) > 4)
+    {
+      fprintf(stderr, "error talking to server: %s\n", &(buf[4]));
+    }
+    else
+    {
+      fprintf(stderr, "error talking to server\n");
+    }
+    close(client_sockfd);
+    return(-1);
+  }
+
+  if(!(options & OPT_QUIET))
+  {
+    printf("request successful\n");
+  }
+
+  close(client_sockfd);
+  return 0;
+}
+
+static int is_in_list(char *needle, char **haystack)
+{
+  char **p;
+  int found = 0;
+
+  for(p=haystack; *p != NULL; p++)
+  {
+    if(strcmp(needle, *p) == 0)
+    {
+      found = 1;
+      break;
+    }
+  }
+
+  return(found);
+}
+
+void warn_fields(char **okay_fields)
+{
+  if(wildcard != 0 && !is_in_list("wildcard", okay_fields))
+  {
+    fprintf(stderr, "warning: this service does not support the %s option\n",
+        "wildcard");
+  }
+  if(!(mx == NULL || *mx == '\0') && !is_in_list("mx", okay_fields))
+  {
+    fprintf(stderr, "warning: this service does not support the %s option\n",
+        "mx");
+  }
+  if(!(url == NULL || *url == '\0') && !is_in_list("url", okay_fields))
+  {
+    fprintf(stderr, "warning: this service does not support the %s option\n",
+        "url");
+  }
+  if(!(cloak_title == NULL || *cloak_title == '\0') && !is_in_list("cloak_title", okay_fields))
+  {
+    fprintf(stderr, "warning: this service does not support the %s option\n",
+        "cloak_title");
+  }
+}
 
 void handle_sig(int sig)
 {
