@@ -15,7 +15,7 @@ ac_help="$ac_help
   --enable-default-service=SERVICE
                           the default service type to use
                           possibilities are: ezip, pgpow, justlinux, dhs,
-                          dyndns, dyndns-static, ods, tzo, gnudip, easydns, dyns, hn, zoneedit"
+                          dyndns, dyndns-static, ods, tzo, gnudip, easydns, easydns-partner, dyns, hn, zoneedit, heipv6tb"
 ac_help="$ac_help
   --enable-debug          include support for debugging"
 ac_help="$ac_help
@@ -703,7 +703,7 @@ fi
 
 PACKAGE=ez-ipupdate
 
-VERSION=3.0.10
+VERSION=3.0.11b6
 
 if test "`cd $srcdir && pwd`" != "`pwd`" && test -f $srcdir/config.status; then
   { echo "configure: error: source directory already configured; run "make distclean" there first" 1>&2; exit 1; }
@@ -1431,16 +1431,24 @@ for ac_func in socket \
 		getpid \
 		fork \
 		vfork \
+		getuid \
+		geteuid \
+		setuid \
+		seteuid \
+		getgid \
+		getegid \
+		setgid \
+		setegid \
 		inet_aton \
 		herror 
 do
 echo $ac_n "checking for $ac_func""... $ac_c" 1>&6
-echo "configure:1439: checking for $ac_func" >&5
+echo "configure:1447: checking for $ac_func" >&5
 if eval "test \"`echo '$''{'ac_cv_func_$ac_func'+set}'`\" = set"; then
   echo $ac_n "(cached) $ac_c" 1>&6
 else
   cat > conftest.$ac_ext <<EOF
-#line 1444 "configure"
+#line 1452 "configure"
 #include "confdefs.h"
 /* System header to define __stub macros and hopefully few prototypes,
     which can conflict with char $ac_func(); below.  */
@@ -1463,7 +1471,7 @@ $ac_func();
 
 ; return 0; }
 EOF
-if { (eval echo configure:1467: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest${ac_exeext}; then
+if { (eval echo configure:1475: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest${ac_exeext}; then
   rm -rf conftest*
   eval "ac_cv_func_$ac_func=yes"
 else
@@ -1505,17 +1513,17 @@ for ac_hdr in arpa/inet.h \
 do
 ac_safe=`echo "$ac_hdr" | sed 'y%./+-%__p_%'`
 echo $ac_n "checking for $ac_hdr""... $ac_c" 1>&6
-echo "configure:1509: checking for $ac_hdr" >&5
+echo "configure:1517: checking for $ac_hdr" >&5
 if eval "test \"`echo '$''{'ac_cv_header_$ac_safe'+set}'`\" = set"; then
   echo $ac_n "(cached) $ac_c" 1>&6
 else
   cat > conftest.$ac_ext <<EOF
-#line 1514 "configure"
+#line 1522 "configure"
 #include "confdefs.h"
 #include <$ac_hdr>
 EOF
 ac_try="$ac_cpp conftest.$ac_ext >/dev/null 2>conftest.out"
-{ (eval echo configure:1519: \"$ac_try\") 1>&5; (eval $ac_try) 2>&5; }
+{ (eval echo configure:1527: \"$ac_try\") 1>&5; (eval $ac_try) 2>&5; }
 ac_err=`grep -v '^ *+' conftest.out | grep -v "^conftest.${ac_ext}\$"`
 if test -z "$ac_err"; then
   rm -rf conftest*
@@ -1549,17 +1557,17 @@ for ac_hdr in unistd.h \
 do
 ac_safe=`echo "$ac_hdr" | sed 'y%./+-%__p_%'`
 echo $ac_n "checking for $ac_hdr""... $ac_c" 1>&6
-echo "configure:1553: checking for $ac_hdr" >&5
+echo "configure:1561: checking for $ac_hdr" >&5
 if eval "test \"`echo '$''{'ac_cv_header_$ac_safe'+set}'`\" = set"; then
   echo $ac_n "(cached) $ac_c" 1>&6
 else
   cat > conftest.$ac_ext <<EOF
-#line 1558 "configure"
+#line 1566 "configure"
 #include "confdefs.h"
 #include <$ac_hdr>
 EOF
 ac_try="$ac_cpp conftest.$ac_ext >/dev/null 2>conftest.out"
-{ (eval echo configure:1563: \"$ac_try\") 1>&5; (eval $ac_try) 2>&5; }
+{ (eval echo configure:1571: \"$ac_try\") 1>&5; (eval $ac_try) 2>&5; }
 ac_err=`grep -v '^ *+' conftest.out | grep -v "^conftest.${ac_ext}\$"`
 if test -z "$ac_err"; then
   rm -rf conftest*
@@ -1588,7 +1596,7 @@ done
 
 
 echo $ac_n "checking for sys_errlist in -lc""... $ac_c" 1>&6
-echo "configure:1592: checking for sys_errlist in -lc" >&5
+echo "configure:1600: checking for sys_errlist in -lc" >&5
 ac_lib_var=`echo c'_'sys_errlist | sed 'y%./+-%__p_%'`
 if eval "test \"`echo '$''{'ac_cv_lib_$ac_lib_var'+set}'`\" = set"; then
   echo $ac_n "(cached) $ac_c" 1>&6
@@ -1596,7 +1604,7 @@ else
   ac_save_LIBS="$LIBS"
 LIBS="-lc  $LIBS"
 cat > conftest.$ac_ext <<EOF
-#line 1600 "configure"
+#line 1608 "configure"
 #include "confdefs.h"
 /* Override any gcc2 internal prototype to avoid an error.  */
 /* We use char because int might match the return type of a gcc2
@@ -1607,7 +1615,7 @@ int main() {
 sys_errlist()
 ; return 0; }
 EOF
-if { (eval echo configure:1611: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest${ac_exeext}; then
+if { (eval echo configure:1619: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest${ac_exeext}; then
   rm -rf conftest*
   eval "ac_cv_lib_$ac_lib_var=yes"
 else
@@ -1634,12 +1642,12 @@ fi
 for ac_func in getopt
 do
 echo $ac_n "checking for $ac_func""... $ac_c" 1>&6
-echo "configure:1638: checking for $ac_func" >&5
+echo "configure:1646: checking for $ac_func" >&5
 if eval "test \"`echo '$''{'ac_cv_func_$ac_func'+set}'`\" = set"; then
   echo $ac_n "(cached) $ac_c" 1>&6
 else
   cat > conftest.$ac_ext <<EOF
-#line 1643 "configure"
+#line 1651 "configure"
 #include "confdefs.h"
 /* System header to define __stub macros and hopefully few prototypes,
     which can conflict with char $ac_func(); below.  */
@@ -1662,7 +1670,7 @@ $ac_func();
 
 ; return 0; }
 EOF
-if { (eval echo configure:1666: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest${ac_exeext}; then
+if { (eval echo configure:1674: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest${ac_exeext}; then
   rm -rf conftest*
   eval "ac_cv_func_$ac_func=yes"
 else
@@ -1691,12 +1699,12 @@ if test "$ac_cv_func_getopt" != yes; then
 fi
 
 echo $ac_n "checking for getpass""... $ac_c" 1>&6
-echo "configure:1695: checking for getpass" >&5
+echo "configure:1703: checking for getpass" >&5
 if eval "test \"`echo '$''{'ac_cv_func_getpass'+set}'`\" = set"; then
   echo $ac_n "(cached) $ac_c" 1>&6
 else
   cat > conftest.$ac_ext <<EOF
-#line 1700 "configure"
+#line 1708 "configure"
 #include "confdefs.h"
 /* System header to define __stub macros and hopefully few prototypes,
     which can conflict with char getpass(); below.  */
@@ -1719,7 +1727,7 @@ getpass();
 
 ; return 0; }
 EOF
-if { (eval echo configure:1723: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest${ac_exeext}; then
+if { (eval echo configure:1731: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest${ac_exeext}; then
   rm -rf conftest*
   eval "ac_cv_func_getpass=yes"
 else
@@ -1751,7 +1759,7 @@ else { echo "configure: error: can not run $ac_config_sub" 1>&2; exit 1; }
 fi
 
 echo $ac_n "checking host system type""... $ac_c" 1>&6
-echo "configure:1755: checking host system type" >&5
+echo "configure:1763: checking host system type" >&5
 
 host_alias=$host
 case "$host_alias" in
@@ -1777,7 +1785,7 @@ EOF
 
 
 echo $ac_n "checking for user supplied default service""... $ac_c" 1>&6
-echo "configure:1781: checking for user supplied default service" >&5
+echo "configure:1789: checking for user supplied default service" >&5
 # Check whether --enable-default-service or --disable-default-service was given.
 if test "${enable_default_service+set}" = set; then
   enableval="$enable_default_service"
@@ -1791,71 +1799,79 @@ fi
 
 case "$use_SERVICE" in
   ezip ) cat >> confdefs.h <<\EOF
-#define DEF_SERVICE EZIP_service
+#define DEF_SERVICE "ezip"
 EOF
 ;;
   ez-ip ) cat >> confdefs.h <<\EOF
-#define DEF_SERVICE EZIP_service
+#define DEF_SERVICE "ezip"
 EOF
 ;;
   pgpow ) cat >> confdefs.h <<\EOF
-#define DEF_SERVICE PGPOW_service
+#define DEF_SERVICE "pgpow"
 EOF
 ;;
   penguinpowered ) cat >> confdefs.h <<\EOF
-#define DEF_SERVICE PGPOW_service
+#define DEF_SERVICE "pgpow"
 EOF
 ;;
   justlinux ) cat >> confdefs.h <<\EOF
-#define DEF_SERVICE JUSTL_service
+#define DEF_SERVICE "justlinux"
 EOF
 ;;
   dhs ) cat >> confdefs.h <<\EOF
-#define DEF_SERVICE DHS_service
+#define DEF_SERVICE "dhs"
 EOF
 ;;
   dyndns ) cat >> confdefs.h <<\EOF
-#define DEF_SERVICE DYNDNS_service
+#define DEF_SERVICE "dyndns"
 EOF
 ;;
   dyndns-stat ) cat >> confdefs.h <<\EOF
-#define DEF_SERVICE DYNDNS_STAT_service
+#define DEF_SERVICE "dyndns-stat"
 EOF
 ;;
   dyndns-static ) cat >> confdefs.h <<\EOF
-#define DEF_SERVICE DYNDNS_STAT_service
+#define DEF_SERVICE "dyndns-static"
 EOF
 ;;
   ods ) cat >> confdefs.h <<\EOF
-#define DEF_SERVICE ODS_service
+#define DEF_SERVICE "ods"
 EOF
 ;;
   tzo ) cat >> confdefs.h <<\EOF
-#define DEF_SERVICE TZO_service
+#define DEF_SERVICE "tzo"
 EOF
 ;;
   gnudip ) cat >> confdefs.h <<\EOF
-#define DEF_SERVICE GNUDIP_service
+#define DEF_SERVICE "gnudip"
 EOF
 ;;
   easydns ) cat >> confdefs.h <<\EOF
-#define DEF_SERVICE EASYDNS_service
+#define DEF_SERVICE "easydns"
+EOF
+;;
+  easydns-partner ) cat >> confdefs.h <<\EOF
+#define DEF_SERVICE "easydns-partner"
 EOF
 ;;
   dyns ) cat >> confdefs.h <<\EOF
-#define DEF_SERVICE DYNS_service
+#define DEF_SERVICE "dyns"
 EOF
 ;;
   hn ) cat >> confdefs.h <<\EOF
-#define DEF_SERVICE HN_service
+#define DEF_SERVICE "hn"
 EOF
 ;;
   zoneedit ) cat >> confdefs.h <<\EOF
-#define DEF_SERVICE ZONEEDIT_service
+#define DEF_SERVICE "zoneedit"
+EOF
+;;
+  heipv6tb ) cat >> confdefs.h <<\EOF
+#define DEF_SERVICE "heipv6tb"
 EOF
 ;;
   null ) cat >> confdefs.h <<\EOF
-#define DEF_SERVICE NULL_service
+#define DEF_SERVICE "NULL"
 EOF
 ;;
   "" ) ;;
@@ -1863,7 +1879,7 @@ EOF
 esac
 
 echo $ac_n "checking whether user wants debugging support""... $ac_c" 1>&6
-echo "configure:1867: checking whether user wants debugging support" >&5
+echo "configure:1883: checking whether user wants debugging support" >&5
 # Check whether --enable-debug or --disable-debug was given.
 if test "${enable_debug+set}" = set; then
   enableval="$enable_debug"
@@ -1878,7 +1894,7 @@ fi
 
 
 echo $ac_n "checking whether user wants to dissable MD5 support""... $ac_c" 1>&6
-echo "configure:1882: checking whether user wants to dissable MD5 support" >&5
+echo "configure:1898: checking whether user wants to dissable MD5 support" >&5
 # Check whether --enable-md5 or --disable-md5 was given.
 if test "${enable_md5+set}" = set; then
   enableval="$enable_md5"

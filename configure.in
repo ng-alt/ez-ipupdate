@@ -2,7 +2,7 @@
 dnl Process this file with autoconf to produce a configure script.
 AC_INIT(ez-ipupdate.c)
 AM_CONFIG_HEADER(config.h)
-AM_INIT_AUTOMAKE(ez-ipupdate,3.0.10)
+AM_INIT_AUTOMAKE(ez-ipupdate,3.0.11b6)
 
 
 dnl Checks for programs.
@@ -44,6 +44,14 @@ AC_CHECK_FUNCS( socket \
 		getpid \
 		fork \
 		vfork \
+		getuid \
+		geteuid \
+		setuid \
+		seteuid \
+		getgid \
+		getegid \
+		setgid \
+		setegid \
 		inet_aton \
 		herror )
 
@@ -93,30 +101,32 @@ AC_ARG_ENABLE(default-service,
               [  --enable-default-service=SERVICE
                           the default service type to use
                           possibilities are: ezip, pgpow, justlinux, dhs,
-                          dyndns, dyndns-static, ods, tzo, gnudip, easydns, dyns, hn, zoneedit],
+                          dyndns, dyndns-static, ods, tzo, gnudip, easydns, easydns-partner, dyns, hn, zoneedit, heipv6tb],
 	      [ use_SERVICE=$enableval;
 		AC_MSG_RESULT(yes) ],
 	      [ AC_MSG_RESULT(no) 
                 use_SERVICE=null
                 AC_MSG_WARN(not setting default service) ]   )
 case "$use_SERVICE" in
-  ezip ) AC_DEFINE(DEF_SERVICE, EZIP_service);;
-  ez-ip ) AC_DEFINE(DEF_SERVICE, EZIP_service);;
-  pgpow ) AC_DEFINE(DEF_SERVICE, PGPOW_service);;
-  penguinpowered ) AC_DEFINE(DEF_SERVICE, PGPOW_service);;
-  justlinux ) AC_DEFINE(DEF_SERVICE, JUSTL_service);;
-  dhs ) AC_DEFINE(DEF_SERVICE, DHS_service);;
-  dyndns ) AC_DEFINE(DEF_SERVICE, DYNDNS_service);;
-  dyndns-stat ) AC_DEFINE(DEF_SERVICE, DYNDNS_STAT_service);;
-  dyndns-static ) AC_DEFINE(DEF_SERVICE, DYNDNS_STAT_service);;
-  ods ) AC_DEFINE(DEF_SERVICE, ODS_service);;
-  tzo ) AC_DEFINE(DEF_SERVICE, TZO_service);;
-  gnudip ) AC_DEFINE(DEF_SERVICE, GNUDIP_service);;
-  easydns ) AC_DEFINE(DEF_SERVICE, EASYDNS_service);;
-  dyns ) AC_DEFINE(DEF_SERVICE, DYNS_service);;
-  hn ) AC_DEFINE(DEF_SERVICE, HN_service);;
-  zoneedit ) AC_DEFINE(DEF_SERVICE, ZONEEDIT_service);;
-  null ) AC_DEFINE(DEF_SERVICE, NULL_service);;
+  ezip ) AC_DEFINE(DEF_SERVICE, "ezip");;
+  ez-ip ) AC_DEFINE(DEF_SERVICE, "ezip");;
+  pgpow ) AC_DEFINE(DEF_SERVICE, "pgpow");;
+  penguinpowered ) AC_DEFINE(DEF_SERVICE, "pgpow");;
+  justlinux ) AC_DEFINE(DEF_SERVICE, "justlinux");;
+  dhs ) AC_DEFINE(DEF_SERVICE, "dhs");;
+  dyndns ) AC_DEFINE(DEF_SERVICE, "dyndns");;
+  dyndns-stat ) AC_DEFINE(DEF_SERVICE, "dyndns-stat");;
+  dyndns-static ) AC_DEFINE(DEF_SERVICE, "dyndns-static");;
+  ods ) AC_DEFINE(DEF_SERVICE, "ods");;
+  tzo ) AC_DEFINE(DEF_SERVICE, "tzo");;
+  gnudip ) AC_DEFINE(DEF_SERVICE, "gnudip");;
+  easydns ) AC_DEFINE(DEF_SERVICE, "easydns");;
+  easydns-partner ) AC_DEFINE(DEF_SERVICE, "easydns-partner");;
+  dyns ) AC_DEFINE(DEF_SERVICE, "dyns");;
+  hn ) AC_DEFINE(DEF_SERVICE, "hn");;
+  zoneedit ) AC_DEFINE(DEF_SERVICE, "zoneedit");;
+  heipv6tb ) AC_DEFINE(DEF_SERVICE, "heipv6tb");;
+  null ) AC_DEFINE(DEF_SERVICE, "NULL");;
   "" ) ;;
   * ) AC_MSG_ERROR(unknown default service type);;
 esac

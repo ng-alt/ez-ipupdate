@@ -1,7 +1,7 @@
 
 RCS file: /home/amackay/src/cvsroot/ez-ipupdate/ez-ipupdate.c,v
 Working file: ez-ipupdate.c
-head: 1.44
+head: 1.47
 branch:
 locks: strict
 access list:
@@ -11,8 +11,23 @@ symbolic names:
 	v0_9_0: 1.1.1.1
 	AMACKAY: 1.1.1
 keyword substitution: kv
-total revisions: 45;	selected revisions: 45
+total revisions: 48;	selected revisions: 48
 description:
+----------------------------
+revision 1.47
+date: 2001/07/04 09:56:47;  author: amackay;  state: Exp;  lines: +171 -27
+added some new ipv6 tunnel service
+added run-as-euser
+fixed hn.org so it works again
+----------------------------
+revision 1.46
+date: 2001/07/04 08:49:26;  author: amackay;  state: Exp;  lines: +421 -239
+added easydns partner support
+re-arranged things to use an array of structs of services
+----------------------------
+revision 1.45
+date: 2001/04/04 17:20:12;  author: amackay;  state: Exp;  lines: +3 -5
+bug in the cache file handling that caused a segfault.
 ----------------------------
 revision 1.44
 date: 2001/03/31 20:05:51;  author: amackay;  state: Exp;  lines: +11 -4

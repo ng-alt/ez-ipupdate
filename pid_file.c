@@ -21,9 +21,22 @@ int pid_file_create(char *pid_file)
 {
 #if HAVE_GETPID
   char buf[64];
-  FILE* fp;
+  FILE* fp = NULL;
   pid_t mypid;
   pid_t otherpid = -1;
+
+#if HAVE_SETEUID && HAVE_SETEGID
+  gid_t oldegid = -1;
+  uid_t oldeuid = -1;
+#endif
+
+#if HAVE_SETEUID && HAVE_SETEGID
+  oldegid = getegid();
+  oldeuid = geteuid();
+
+  setegid(getgid());
+  seteuid(getuid());
+#endif
 
   // check if the pid file exists
   if((fp=fopen(pid_file, "r")) != NULL)
@@ -32,8 +45,7 @@ int pid_file_create(char *pid_file)
     if(fgets(buf, sizeof(buf), fp) == NULL)
     {
       fprintf(stderr, "error reading pid file: %s (%s)\n", pid_file, error_string);
-      fclose(fp);
-      return(-1);
+      goto ERR;
     }
     fclose(fp);
     otherpid = atoi(buf);
@@ -43,7 +55,7 @@ int pid_file_create(char *pid_file)
     {
       // if it is alive then we quit
       fprintf(stderr, "there is another program already running with pid %d.\n", (int)otherpid);
-      return(-1);
+      goto ERR;
     }
   }
 
@@ -51,7 +63,7 @@ int pid_file_create(char *pid_file)
   if((fp=fopen(pid_file, "w")) == NULL)
   {
     fprintf(stderr, "could not create pid file: %s (%s)\n", pid_file, error_string);
-    return(-1);
+    goto ERR;
   }
 
   mypid = getpid();
@@ -61,7 +73,21 @@ int pid_file_create(char *pid_file)
   dprintf((stderr, "pid file %s successfully created with value %d.\n",
       pid_file, (int)mypid));
 
+#if HAVE_SETEUID && HAVE_SETEGID
+  setegid(oldegid);
+  seteuid(oldeuid);
+#endif
+
   return 0;
+
+ERR:
+  if(fp) { fclose(fp); fp = NULL; }
+#if HAVE_SETEUID && HAVE_SETEGID
+  setegid(oldegid);
+  seteuid(oldeuid);
+#endif
+  return(-1);
+
 #else
   return(-1);
 #endif
@@ -69,6 +95,28 @@ int pid_file_create(char *pid_file)
 
 int pid_file_delete(char *pid_file)
 {
-   return unlink(pid_file);
+  int ret;
+
+#if HAVE_SETEUID && HAVE_SETEGID
+  gid_t oldegid = -1;
+  uid_t oldeuid = -1;
+#endif
+
+#if HAVE_SETEUID && HAVE_SETEGID
+  oldegid = getegid();
+  oldeuid = geteuid();
+
+  setegid(getgid());
+  seteuid(getuid());
+#endif
+
+  ret = unlink(pid_file);
+
+#if HAVE_SETEUID && HAVE_SETEGID
+  setegid(oldegid);
+  seteuid(oldeuid);
+#endif
+
+  return ret;
 }
 
