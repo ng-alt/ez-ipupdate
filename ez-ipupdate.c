@@ -28,7 +28,7 @@
  * why this program when something like:
  *   curl -u user:pass http://www.ez-ip.net/members/update/?key=val&...
  * would do the trick? because there are nicer clients for other OSes and
- * I don't like to see UNIX get the sort end of the stick.
+ * I don't like to see UNIX get the short end of the stick.
  *
  * tested under Linux and Solaris.
  * 
@@ -154,7 +154,7 @@ void print_useage( void )
   fprintf(stdout, "  -a, --address <ip address>\tstring to send as your ip address\n");
   fprintf(stdout, "  -d, --daemon\t\t\trun as a daemon periodicly updating if necessary\n");
 #ifdef DEBUG
-  fprintf(stdout, "  -D, --debug\t\tturn on debuggin\n");
+  fprintf(stdout, "  -D, --debug\t\t\tturn on debuggin\n");
 #endif
   fprintf(stdout, "  -f, --foreground\t\twhen running as a daemon run in the foreground\n");
   fprintf(stdout, "  -h, --host <host>\t\tstring to send as host parameter\n");
@@ -544,6 +544,7 @@ int update_entry(void)
     {
       fprintf(stderr, "error connecting to %s:%s\n", server, port);
     }
+    close(client_sockfd);
     return(-1);
   }
 
@@ -563,8 +564,8 @@ int update_entry(void)
   output(buf);
   snprint(buf, BUFFER_SIZE, "Authorization: Basic %s\015\012", auth);
   output(buf);
-  snprint(buf, BUFFER_SIZE, "User-Agent: %s-%s %s\015\012", 
-      "ez-ipaddress", VERSION, OS);
+  snprint(buf, BUFFER_SIZE, "User-Agent: %s-%s %s (%s)\015\012", 
+      "ez-update", VERSION, OS, "by Angus Mackay");
   output(buf);
   snprint(buf, BUFFER_SIZE, "Host: %s\015\012", server);
   output(buf);
