@@ -34,11 +34,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if HAVE_ERRNO_H
+#  include <errno.h>
+#endif
 
 #include <conf_file.h>
+#include <dprintf.h>
 
 #if HAVE_STRERROR
-extern int errno;
+//extern int errno;
 #  define error_string strerror(errno)
 #elif HAVE_SYS_ERRLIST
 extern const char *const sys_errlist[];
@@ -47,20 +51,6 @@ extern int errno;
 #else
 #  define error_string "error message not found"
 #endif
-
-#ifdef DEBUG
-#define dprintf(x) if( options & OPT_DEBUG ) \
-{ \
-  fprintf(stderr, "%s,%d: ", __FILE__, __LINE__); \
-    fprintf x; \
-}
-#else
-#  define dprintf(x)
-#endif
-
-#define OPT_DEBUG       0x0001
-
-extern int options;
 
 int parse_conf_file(char *fname, struct conf_cmd *commands)
 {
@@ -85,7 +75,7 @@ int parse_conf_file(char *fname, struct conf_cmd *commands)
   {
     if((in=fopen(fname, "r")) == NULL)
     {
-      fprintf(stderr, "could not open config file \"%s\": %s\n", fname, error_string);
+      show_message("could not open config file \"%s\": %s\n", fname, error_string);
       return(-1);
     }
   }
@@ -138,7 +128,7 @@ int parse_conf_file(char *fname, struct conf_cmd *commands)
     }
     if(cmd->name == NULL)
     {
-      fprintf(stderr, "%s,%d: unknown command: %s\n", fname, lnum, cmd_start);
+      show_message("%s,%d: unknown command: %s\n", fname, lnum, cmd_start);
 
       fprintf(stderr, "commands are:\n");
       cmd = commands;
@@ -158,7 +148,7 @@ int parse_conf_file(char *fname, struct conf_cmd *commands)
       case CONF_NEED_ARG:
         if(arg == NULL)
         {
-          fprintf(stderr, "option \"%s\" requires an argument\n", cmd->name);
+          show_message("option \"%s\" requires an argument\n", cmd->name);
           goto ERR;
         }
         break;
@@ -179,7 +169,7 @@ int parse_conf_file(char *fname, struct conf_cmd *commands)
     /* is the command implemented? */
     if(!cmd->available)
     {
-      fprintf(stderr, "the command \"%s\" is not available\n", cmd->name);
+      show_message("the command \"%s\" is not available\n", cmd->name);
       continue;
     }
 

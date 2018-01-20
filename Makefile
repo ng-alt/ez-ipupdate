@@ -1,3 +1,4 @@
+# Generated automatically from Makefile.in by configure.
 # Makefile.in generated automatically by automake 1.4 from Makefile.am
 
 # Copyright (C) 1994, 1995-8, 1999 Free Software Foundation, Inc.
@@ -10,46 +11,45 @@
 # even the implied warranty of MERCHANTABILITY or FITNESS FOR A
 # PARTICULAR PURPOSE.
 
+include ../.config
+SHELL = /bin/sh
 
-SHELL = @SHELL@
+srcdir = .
+top_srcdir = .
+prefix = /usr/local
+exec_prefix = ${prefix}
 
-srcdir = @srcdir@
-top_srcdir = @top_srcdir@
-VPATH = @srcdir@
-prefix = @prefix@
-exec_prefix = @exec_prefix@
-
-bindir = @bindir@
-sbindir = @sbindir@
-libexecdir = @libexecdir@
-datadir = @datadir@
-sysconfdir = @sysconfdir@
-sharedstatedir = @sharedstatedir@
-localstatedir = @localstatedir@
-libdir = @libdir@
-infodir = @infodir@
-mandir = @mandir@
-includedir = @includedir@
+bindir = ${exec_prefix}/bin
+sbindir = ${exec_prefix}/sbin
+libexecdir = ${exec_prefix}/libexec
+datadir = ${prefix}/share
+sysconfdir = ${prefix}/etc
+sharedstatedir = ${prefix}/com
+localstatedir = ${prefix}/var
+libdir = ${exec_prefix}/lib
+infodir = ${prefix}/info
+mandir = ${prefix}/man
+includedir = ${prefix}/include
 oldincludedir = /usr/include
 
 DESTDIR =
 
-pkgdatadir = $(datadir)/@PACKAGE@
-pkglibdir = $(libdir)/@PACKAGE@
-pkgincludedir = $(includedir)/@PACKAGE@
+pkgdatadir = $(datadir)/ez-ipupdate
+pkglibdir = $(libdir)/ez-ipupdate
+pkgincludedir = $(includedir)/ez-ipupdate
 
 top_builddir = .
 
-ACLOCAL = @ACLOCAL@
-AUTOCONF = @AUTOCONF@
-AUTOMAKE = @AUTOMAKE@
-AUTOHEADER = @AUTOHEADER@
+ACLOCAL = aclocal
+AUTOCONF = autoconf
+AUTOMAKE = automake
+AUTOHEADER = autoheader
 
-INSTALL = @INSTALL@
-INSTALL_PROGRAM = @INSTALL_PROGRAM@ $(AM_INSTALL_PROGRAM_FLAGS)
-INSTALL_DATA = @INSTALL_DATA@
-INSTALL_SCRIPT = @INSTALL_SCRIPT@
-transform = @program_transform_name@
+INSTALL = /usr/bin/install -c
+INSTALL_PROGRAM = ${INSTALL} $(AM_INSTALL_PROGRAM_FLAGS)
+INSTALL_DATA = ${INSTALL} -m 644
+INSTALL_SCRIPT = ${INSTALL_PROGRAM}
+transform = s,x,x,
 
 NORMAL_INSTALL = :
 PRE_INSTALL = :
@@ -57,19 +57,19 @@ POST_INSTALL = :
 NORMAL_UNINSTALL = :
 PRE_UNINSTALL = :
 POST_UNINSTALL = :
-host_alias = @host_alias@
-host_triplet = @host@
-CC = @CC@
-CPP = @CPP@
-EXTRAOBJ = @EXTRAOBJ@
-EXTRASRC = @EXTRASRC@
-MAKEINFO = @MAKEINFO@
-PACKAGE = @PACKAGE@
-VERSION = @VERSION@
+host_alias = i686-pc-linux-gnu
+host_triplet = i686-pc-linux-gnu
+#CC = gcc
+#CPP = gcc -E
+EXTRAOBJ = 
+EXTRASRC = 
+MAKEINFO = makeinfo
+PACKAGE = ez-ipupdate
+VERSION = 3.0.11b7
 
 bin_PROGRAMS = ez-ipupdate
-ez_ipupdate_SOURCES = ez-ipupdate.c conf_file.c conf_file.h md5.c md5.h cache_file.c cache_file.h error.h pid_file.c pid_file.h dprintf.h @EXTRASRC@
-ez_ipupdate_LDADD = @EXTRAOBJ@
+ez_ipupdate_SOURCES = ez-ipupdate.c conf_file.c conf_file.h md5.c md5.h cache_file.c cache_file.h error.h pid_file.c pid_file.h dprintf.h 
+ez_ipupdate_LDADD = 
 
 EXTRA_DIST = getpass.c ez-ipupdate.lsm example.conf example-pgpow.conf example-dhs.conf example-dnsomatic.conf example-dyndns.conf example-ods.conf example-tzo.conf example-gnudip.conf example-easydns.conf example-justlinux.conf example-dyns.conf CHANGELOG mkbinary example-heipv6tb.conf
 
@@ -80,16 +80,38 @@ CONFIG_HEADER = config.h
 CONFIG_CLEAN_FILES = 
 PROGRAMS =  $(bin_PROGRAMS)
 
+#2007.03.14 Yau add
+MD5_CHECK = md5_check
 
-DEFS = @DEFS@ -I. -I$(srcdir) -I.
-CPPFLAGS = @CPPFLAGS@
-LDFLAGS = @LDFLAGS@
-LIBS = @LIBS@
+DEFS = -DHAVE_CONFIG_H -I. -I$(srcdir) -I.
+CPPFLAGS = 
+#LDFLAGS = 
+LIBS = $(LDLIBS)
+
 ez_ipupdate_OBJECTS =  ez-ipupdate.o conf_file.o md5.o cache_file.o \
 pid_file.o
+
 ez_ipupdate_DEPENDENCIES = 
 ez_ipupdate_LDFLAGS = 
-CFLAGS = @CFLAGS@
+#CFLAGS = -g -O2
+
+# 2007.03.14 Yau add for ASUS DDNS
+ez_ipupdate_OBJECTS += asus_ddns.o
+CFLAGS += -I$(SRCBASE)/include -I$(TOP)/shared -DASUS_DDNS -DHAVE_STRING_H -D_LIBC
+LDFLAGS += -L$(TOP)/shared -lshared -L$(TOP)/nvram${BCMEX} -lnvram 
+#end of Yau add
+ifeq ($(RTCONFIG_BCMARM),y)
+LDFLAGS += -lgcc_s
+endif
+
+# Just copying what ASUS did here. This should be in Makefile.in instead.
+ez_ipupdate_OBJECTS += namecheap.o
+
+ifeq ($(RTCONFIG_QTN),y)
+CFLAGS += -I$(TOP)/libqcsapi_client -I$(TOP)/httpd -I./sysdeps/qtn
+LDFLAGS += -L$(TOP)/libqcsapi_client -lqcsapi_client
+endif
+
 COMPILE = $(CC) $(DEFS) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS)
 CCLD = $(CC)
 LINK = $(CCLD) $(AM_CFLAGS) $(CFLAGS) $(LDFLAGS) -o $@
@@ -111,9 +133,9 @@ all: all-redirect
 $(srcdir)/Makefile.in: Makefile.am $(top_srcdir)/configure.in $(ACLOCAL_M4) 
 	cd $(top_srcdir) && $(AUTOMAKE) --foreign --include-deps Makefile
 
-Makefile: $(srcdir)/Makefile.in  $(top_builddir)/config.status
-	cd $(top_builddir) \
-	  && CONFIG_FILES=$@ CONFIG_HEADERS= $(SHELL) ./config.status
+#Makefile: $(srcdir)/Makefile.in  $(top_builddir)/config.status
+#	cd $(top_builddir) \
+#	  && CONFIG_FILES=$@ CONFIG_HEADERS= $(SHELL) ./config.status
 
 $(ACLOCAL_M4):  configure.in 
 	cd $(srcdir) && $(ACLOCAL)
@@ -123,11 +145,11 @@ config.status: $(srcdir)/configure $(CONFIG_STATUS_DEPENDENCIES)
 $(srcdir)/configure: $(srcdir)/configure.in $(ACLOCAL_M4) $(CONFIGURE_DEPENDENCIES)
 	cd $(srcdir) && $(AUTOCONF)
 
-config.h: stamp-h
-	@if test ! -f $@; then \
-		rm -f stamp-h; \
-		$(MAKE) stamp-h; \
-	else :; fi
+#config.h: stamp-h
+#	@if test ! -f $@; then \
+#		rm -f stamp-h; \
+#		$(MAKE) stamp-h; \
+#	else :; fi
 stamp-h: $(srcdir)/config.h.in $(top_builddir)/config.status
 	cd $(top_builddir) \
 	  && CONFIG_FILES= CONFIG_HEADERS=config.h \
@@ -162,7 +184,7 @@ maintainer-clean-binPROGRAMS:
 
 install-binPROGRAMS: $(bin_PROGRAMS)
 	@$(NORMAL_INSTALL)
-	$(mkinstalldirs) $(DESTDIR)$(bindir)
+	#$(mkinstalldirs) $(DESTDIR)$(bindir)
 	@list='$(bin_PROGRAMS)'; for p in $$list; do \
 	  if test -f $$p; then \
 	    echo "  $(INSTALL_PROGRAM) $$p $(DESTDIR)$(bindir)/`echo $$p|sed 's/$(EXEEXT)$$//'|sed '$(transform)'|sed 's/$$/$(EXEEXT)/'`"; \
@@ -186,7 +208,7 @@ uninstall-binPROGRAMS:
 	$(COMPILE) -c $<
 
 mostlyclean-compile:
-	-rm -f *.o core *.core
+	-rm -f *.o core *.core *.gdb
 
 clean-compile:
 
@@ -198,6 +220,12 @@ maintainer-clean-compile:
 ez-ipupdate: $(ez_ipupdate_OBJECTS) $(ez_ipupdate_DEPENDENCIES)
 	@rm -f ez-ipupdate
 	$(LINK) $(ez_ipupdate_LDFLAGS) $(ez_ipupdate_OBJECTS) $(ez_ipupdate_LDADD) $(LIBS)
+
+md5_check:
+	rm -f test_hmac_md5
+	$(CC) $(CFLAGS) -Wall -c -o test_hmac_md5.o -DTEST_HMAC_MD5 -DUSE_MD5 asus_ddns.c
+	$(CC) $(CFLAGS) -Wall -c -o md5_x86.o -DTEST_HMAC_MD5 -DUSE_MD5 md5.c
+	$(CC) -Wall -o test_hmac_md5 test_hmac_md5.o md5_x86.o
 
 tags: TAGS
 
@@ -280,7 +308,9 @@ cache_file.o: cache_file.c config.h cache_file.h
 conf_file.o: conf_file.c config.h conf_file.h
 ez-ipupdate.o: ez-ipupdate.c config.h error.h md5.h dprintf.h \
 	conf_file.h cache_file.h pid_file.h
+
 md5.o: md5.c config.h md5.h
+
 pid_file.o: pid_file.c config.h error.h dprintf.h
 
 info-am:
@@ -305,12 +335,24 @@ install-am: all-am
 install: install-am
 uninstall-am: uninstall-binPROGRAMS
 uninstall: uninstall-am
-all-am: Makefile $(PROGRAMS) config.h
+
+#2007.03.14 Yau add MD5_CHECK
+all-am: $(PROGRAMS) $(MD5_CHECK)
 all-redirect: all-am
 install-strip:
 	$(MAKE) $(AM_MAKEFLAGS) AM_INSTALL_PROGRAM_FLAGS=-s install
 installdirs:
 	$(mkinstalldirs)  $(DESTDIR)$(bindir)
+
+install: $(PROGRAMS)
+	install -D ez-ipupdate $(INSTALLDIR)/usr/sbin/ez-ipupdate
+	$(STRIP) $(INSTALLDIR)/usr/sbin/ez-ipupdate
+#2007.03.14 Yau add
+#	install -D test_hmac_md5 $(INSTALLDIR)/usr/sbin/test_hmac_md5
+#	$(STRIP) $(INSTALLDIR)/usr/sbin/test_hmac_md5
+
+romfs:
+	$(ROMFSINST) /bin/ez-ipupdate
 
 
 mostlyclean-generic:

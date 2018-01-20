@@ -39,11 +39,17 @@
 #if HAVE_ERRNO_H
 #  include <errno.h>
 #endif
+#ifdef EMBED
+#include <fcntl.h>
+#include <signal.h>
+#include <config/autoconf.h>
+#endif
 
 #include <cache_file.h>
+#include <dprintf.h>
 
 #if HAVE_STRERROR
-extern int errno;
+//extern int errno;
 #  define error_string strerror(errno)
 #elif HAVE_SYS_ERRLIST
 extern const char *const sys_errlist[];
@@ -52,30 +58,6 @@ extern int errno;
 #else
 #  define error_string "error message not found"
 #endif
-
-#ifdef DEBUG
-#define dprintf(x) if( options & OPT_DEBUG ) \
-{ \
-  fprintf(stderr, "%s,%d: ", __FILE__, __LINE__); \
-    fprintf x; \
-}
-#else
-#  define dprintf(x)
-#endif
-#if HAVE_STRERROR
-extern int errno;
-#  define error_string strerror(errno)
-#elif HAVE_SYS_ERRLIST
-extern const char *const sys_errlist[];
-extern int errno;
-#  define error_string (sys_errlist[errno])
-#else
-#  define error_string "error message not found"
-#endif
-
-#define OPT_DEBUG       0x0001
-
-extern int options;
 
 int read_cache_file(char *file, time_t *date, char **ipaddr)
 {
@@ -124,7 +106,6 @@ int read_cache_file(char *file, time_t *date, char **ipaddr)
     while(*p != '\0' && *p != ',') { p++; }
     if(*p == '\0')
     {
-      fprintf(stderr, "malformed cache file\n");
       goto ERR;
     }
 
@@ -165,6 +146,22 @@ int write_cache_file(char *file, time_t date, char *ipaddr)
   fprintf(fp, "%ld,%s\n", date, ipaddr);
 
   fclose(fp);
+
+#ifdef CONFIG_USER_FLATFSD_FLATFSD
+  {
+    char value[16];
+    pid_t pid;
+    int fd;
+
+    fd = open("/var/run/flatfsd.pid", O_RDONLY);
+    if (fd != -1) {
+      if (read(fd, value, sizeof(value)) > 0 &&
+          (pid = atoi(value)) > 1)
+        kill(pid, SIGUSR1);
+      close(fd);
+    }
+  }
+#endif
 
   return 0;
 }

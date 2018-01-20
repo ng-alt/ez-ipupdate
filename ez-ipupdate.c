@@ -33,18 +33,29 @@
  * tested under Linux and Solaris.
  * 
  */
+//2007.03.14 Yau add
+#ifdef ASUS_DDNS
+#include "asus_ddns.h"
+#include <bcmnvram.h>
+#endif  // ASUS_DDNS
 
 #ifdef HAVE_CONFIG_H
 #  include <config.h>
 #endif
 
+#ifndef EMBED
 // you man very well need to edit this, don't worry though, email is only sent
 // if bad things happend and it has to exit when in daemon mode.
 #define SEND_EMAIL_CMD "mail"
+#endif
 
 #define EZIP_DEFAULT_SERVER "www.EZ-IP.Net"
 #define EZIP_DEFAULT_PORT "80"
 #define EZIP_REQUEST "/members/update/"
+
+#define NOIP_DEFAULT_SERVER "dynupdate.no-ip.com"
+#define NOIP_DEFAULT_PORT "80"
+#define NOIP_REQUEST "/nic/update"
 
 #define PGPOW_DEFAULT_SERVER "www.penguinpowered.com"
 #define PGPOW_DEFAULT_PORT "2345"
@@ -54,13 +65,22 @@
 #define DHS_DEFAULT_SERVER "members.dhs.org"
 #define DHS_DEFAULT_PORT "80"
 #define DHS_REQUEST "/nic/hosts"
-#define DHS_SUCKY_TIMEOUT 60
+#define DHS_SUCKY_TIMEOUT 5 //60
+
+#define DNSOMATIC_DEFAULT_SERVER "updates.dnsomatic.com"
+#define DNSOMATIC_DEFAULT_PORT "80"
+#define DNSOMATIC_REQUEST "/nic/update"
 
 #define DYNDNS_DEFAULT_SERVER "members.dyndns.org"
 #define DYNDNS_DEFAULT_PORT "80"
 #define DYNDNS_REQUEST "/nic/update"
 #define DYNDNS_STAT_REQUEST "/nic/update"
 #define DYNDNS_MAX_INTERVAL (25*24*3600)
+
+#define QDNS_DEFAULT_SERVER "members.3322.org"
+#define QDNS_DEFAULT_PORT "80"
+#define QDNS_REQUEST "/dyndns/update"
+#define QDNS_STAT_REQUEST "/dyndns/update"
 
 #define ODS_DEFAULT_SERVER "update.ods.org"
 #define ODS_DEFAULT_PORT "7070"
@@ -95,17 +115,24 @@
 #define HN_DEFAULT_PORT "80"
 #define HN_REQUEST "/vanity/update"
 
-#define ZONEEDIT_DEFAULT_SERVER "www.zoneedit.com"
+#define ZONEEDIT_DEFAULT_SERVER "dynamic.zoneedit.com"
 #define ZONEEDIT_DEFAULT_PORT "80"
 #define ZONEEDIT_REQUEST "/auth/dynamic.html"
 
-#define HEIPV6TB_DEFAULT_SERVER "ipv6tb.he.net"
+#define HEIPV6TB_DEFAULT_SERVER "ipv4.tunnelbroker.net"
 #define HEIPV6TB_DEFAULT_PORT "80"
-#define HEIPV6TB_REQUEST "/index.cgi"
+#define HEIPV6TB_REQUEST "/ipv4_end.php"
 
-#define DEFAULT_TIMEOUT 120
+//Andy Chiu, 2015/04/02, add for SelfHost.de
+#define SELFHOST_DEFAULT_SERVER	"carol.selfhost.de"
+#define SELFHOST_DEFAULT_PORT	"80"
+#define SELFHOST_REQUEST	"/nic/update"
+
+#define DEFAULT_TIMEOUT 15 //120
 #define DEFAULT_UPDATE_PERIOD 120
 #define DEFAULT_RESOLV_PERIOD 30
+
+#include "namecheap.h"
 
 #ifdef DEBUG
 #  define BUFFER_SIZE (16*1024)
@@ -121,6 +148,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <unistd.h>
+#include <time.h>
 #if HAVE_FCNTL_H
 #  include <fcntl.h>
 #endif
@@ -195,7 +223,7 @@
 #endif
 
 #ifndef HAVE_HERROR
-#  define herror(x) fprintf(stderr, "%s: error\n", x)
+#  define herror(x) show_message("%s: error\n", x)
 #endif
 
 #define ARRAY_LEN(x) (sizeof(x)/sizeof(x[0]))
@@ -216,6 +244,8 @@
 #define MAX_WAITRESPONSE_WAIT (24*3600)
 #define MAX_MESSAGE_LEN 256
 #define ARGLENGTH 32
+#define BLOCK_FILE "/var/run/ez-ipupdate.block"
+#define PID_FILE "/var/run/ez-ipupdate.pid"
 
 /**************************************************/
 
@@ -236,6 +266,7 @@ enum {
   UPDATERES_OK = 0,
   UPDATERES_ERROR,
   UPDATERES_SHUTDOWN,
+  UPDATERES_AUTHFAIL,
 };
 
 /**************************************************/
@@ -268,11 +299,20 @@ char *post_update_cmd = NULL;
 char *post_update_cmd_arg = NULL;
 int connection_type = 1;
 time_t last_update = 0;
+#ifdef SEND_EMAIL_CMD
 char *notify_email = NULL;
+#endif
 char *pid_file = NULL;
 char *partner = NULL;
+char update_entry_buf[BUFFER_SIZE+1];
+char update_entry_putbuf[BUFFER_SIZE+1];
 
+//2007.03.14 Yau add
+#ifdef ASUS_DDNS
+volatile int client_sockfd;
+#else   // !ASUS_DDNS
 static volatile int client_sockfd;
+#endif  // ASUS_DDNS
 static volatile int last_sig = 0;
 
 /* service objects for various services */
@@ -285,9 +325,15 @@ int EZIP_update_entry(void);
 int EZIP_check_info(void);
 static char *EZIP_fields_used[] = { "server", "user", "address", "wildcard", "mx", "url", "host", NULL };
 
+int NOIP_update_entry(void);
+int NOIP_check_info(void);
+static char *NOIP_fields_used[] = { "server", "user", "host", "address", "wildcard", "mx", "offline", NULL };
+
+#ifdef CONFIG_PGP
 int PGPOW_update_entry(void);
 int PGPOW_check_info(void);
 static char *PGPOW_fields_used[] = { "server", "host", NULL };
+#endif
 
 int DHS_update_entry(void);
 int DHS_check_info(void);
@@ -299,9 +345,11 @@ int DYNDNS_check_info(void);
 static char *DYNDNS_fields_used[] = { "server", "user", "address", "wildcard", "mx", "host", NULL };
 static char *DYNDNS_STAT_fields_used[] = { "server", "user", "address", "wildcard", "mx", "host", NULL };
 
+#ifdef CONFIG_ODS
 int ODS_update_entry(void);
 int ODS_check_info(void);
 static char *ODS_fields_used[] = { "server", "host", "address", NULL };
+#endif
 
 int TZO_update_entry(void);
 int TZO_check_info(void);
@@ -316,30 +364,38 @@ int EASYDNS_PARTNER_check_info(void);
 static char *EASYDNS_PARTNER_fields_used[] = { "server", "partner", "user", "address", "wildcard", "host", NULL };
 
 #ifdef USE_MD5
+#ifdef GNUDIP
 int GNUDIP_update_entry(void);
 int GNUDIP_check_info(void);
 static char *GNUDIP_fields_used[] = { "server", "user", "host", "address", NULL };
 #endif
+#endif
 
+#ifdef CONFIG_PGP
 int JUSTL_update_entry(void);
 int JUSTL_check_info(void);
 static char *JUSTL_fields_used[] = { "server", "user", "host", NULL };
+#endif
 
 int DYNS_update_entry(void);
 int DYNS_check_info(void);
 static char *DYNS_fields_used[] = { "server", "user", "host", NULL };
 
+#ifdef CONFIG_HN
 int HN_update_entry(void);
 int HN_check_info(void);
 static char *HN_fields_used[] = { "server", "user", "address", NULL };
+#endif
 
 int ZONEEDIT_update_entry(void);
 int ZONEEDIT_check_info(void);
 static char *ZONEEDIT_fields_used[] = { "server", "user", "address", "mx", "host", NULL };
 
+#ifdef USE_MD5
 int HEIPV6TB_update_entry(void);
 int HEIPV6TB_check_info(void);
-static char *HEIPV6TB_fields_used[] = { "server", "user", NULL };
+static char *HEIPV6TB_fields_used[] = { "server", "user", "address", "host", NULL };
+#endif
 
 struct service_t services[] = {
   { "NULL",
@@ -362,6 +418,17 @@ struct service_t services[] = {
     EZIP_DEFAULT_PORT,
     EZIP_REQUEST
   },
+  { "no-ip",
+    { "noip", "no-ip", 0, },
+    NULL,
+    NOIP_update_entry,
+    NOIP_check_info,
+    NOIP_fields_used,
+    NOIP_DEFAULT_SERVER,
+    NOIP_DEFAULT_PORT,
+    NOIP_REQUEST
+  },
+#ifdef CONFIG_PGP
   { "justlinux v1.0 (penguinpowered)",
     { "pgpow", "penguinpowered", 0, },
     NULL,
@@ -372,6 +439,8 @@ struct service_t services[] = {
     PGPOW_DEFAULT_PORT,
     PGPOW_REQUEST
   },
+#endif
+#ifdef CONFIG_DHS
   { "dhs",
     { "dhs", 0, 0, },
     NULL,
@@ -382,6 +451,7 @@ struct service_t services[] = {
     DHS_DEFAULT_PORT,
     DHS_REQUEST
   },
+#endif
   { "dyndns",
     { "dyndns", 0, 0, },
     DYNDNS_init,
@@ -412,6 +482,38 @@ struct service_t services[] = {
     DYNDNS_DEFAULT_PORT,
     DYNDNS_REQUEST
   },
+  { "qdns",
+    {  "qdns dynamic" },
+    DYNDNS_init,
+    DYNDNS_update_entry,
+    DYNDNS_check_info,
+    DYNDNS_fields_used,
+    QDNS_DEFAULT_SERVER,
+    QDNS_DEFAULT_PORT,
+    QDNS_REQUEST
+  },
+  //Andy Chiu, 2015/04/02, add for SelfHost.de
+  { "selfhost",
+    {  "selfhost", 0, 0 },
+    DYNDNS_init,
+    DYNDNS_update_entry,
+    DYNDNS_check_info,
+    DYNDNS_fields_used,
+    SELFHOST_DEFAULT_SERVER,
+    SELFHOST_DEFAULT_PORT,
+    SELFHOST_REQUEST
+  },
+  { "qdns-static",
+    {"qdns-static"},
+    DYNDNS_init,
+    DYNDNS_update_entry,
+    DYNDNS_check_info,
+    DYNDNS_STAT_fields_used,
+    QDNS_DEFAULT_SERVER,
+    QDNS_DEFAULT_PORT,
+    QDNS_STAT_REQUEST
+  },
+#ifdef CONFIG_ODS
   { "ods",
     { "ods", 0, 0, },
     NULL,
@@ -422,6 +524,7 @@ struct service_t services[] = {
     ODS_DEFAULT_PORT,
     ODS_REQUEST
   },
+#endif
   { "tzo",
     { "tzo", 0, 0, },
     NULL,
@@ -453,6 +556,7 @@ struct service_t services[] = {
     EASYDNS_PARTNER_REQUEST
   },
 #ifdef USE_MD5
+#ifdef GNUDIP
   { "gnudip",
     { "gnudip", 0, 0, },
     NULL,
@@ -464,6 +568,9 @@ struct service_t services[] = {
     GNUDIP_REQUEST
   },
 #endif
+#endif
+
+#ifdef CONFIG_PGP
   { "justlinux v2.0 (penguinpowered)",
     { "justlinux", 0, 0, },
     NULL,
@@ -474,6 +581,7 @@ struct service_t services[] = {
     JUSTL_DEFAULT_PORT,
     JUSTL_REQUEST
   },
+#endif
   { "dyns",
     { "dyns", 0, 0, },
     NULL,
@@ -484,6 +592,7 @@ struct service_t services[] = {
     DYNS_DEFAULT_PORT,
     DYNS_REQUEST
   },
+#ifdef CONFIG_HN
   { "hammer node",
     { "hn", 0, 0, },
     NULL,
@@ -494,6 +603,7 @@ struct service_t services[] = {
     HN_DEFAULT_PORT,
     HN_REQUEST
   },
+#endif
   { "zoneedit",
     { "zoneedit", 0, 0, },
     NULL,
@@ -504,6 +614,7 @@ struct service_t services[] = {
     ZONEEDIT_DEFAULT_PORT,
     ZONEEDIT_REQUEST
   },
+#ifdef USE_MD5
   { "heipv6tb",
     { "heipv6tb", 0, 0, },
     NULL,
@@ -514,9 +625,30 @@ struct service_t services[] = {
     HEIPV6TB_DEFAULT_PORT,
     HEIPV6TB_REQUEST
   },
+#endif
+  { "dnsomatic",
+    { "dnsomatic", 0, 0, },
+    DYNDNS_init,
+    DYNDNS_update_entry,
+    DYNDNS_check_info,
+    DYNDNS_fields_used,
+    DNSOMATIC_DEFAULT_SERVER,
+    DNSOMATIC_DEFAULT_PORT,
+    DNSOMATIC_REQUEST
+  },
+  { "namecheap",
+    { "namecheap", 0, 0, },
+    NULL,
+    NC_update_entry,
+    NC_check_info,
+    NC_fields_used,
+    NC_DEFAULT_SERVER,
+    NC_DEFAULT_PORT,
+    NC_REQUEST
+  },
 };
 
-static struct service_t *service = NULL;
+struct service_t *service = NULL;
 
 int options;
 
@@ -525,6 +657,7 @@ int options;
 #define OPT_QUIET       0x0008
 #define OPT_FOREGROUND  0x0010
 #define OPT_OFFLINE     0x0020
+#define OPT_ONCE		0x0040
 
 enum { 
   CMD__start = 1,
@@ -553,10 +686,17 @@ enum {
   CMD_run_as_euser,
   CMD_connection_type,
   CMD_cache_file,
+#ifdef SEND_EMAIL_CMD
   CMD_notify_email,
+#endif
   CMD_pid_file,
   CMD_offline,
   CMD_partner,
+  CMD_once,
+//2007.03.14 Yau add
+#ifdef ASUS_DDNS
+  CMD_asus,
+#endif  // ASUS_DDNS
   CMD__end
 };
 
@@ -574,7 +714,9 @@ static struct conf_cmd conf_commands[] = {
   { CMD_interface,       "interface",       CONF_NEED_ARG, 1, conf_handler, "%s=<interface>" },
   { CMD_mx,              "mx",              CONF_NEED_ARG, 1, conf_handler, "%s=<mail exchanger>" },
   { CMD_max_interval,    "max-interval",    CONF_NEED_ARG, 1, conf_handler, "%s=<number of seconds between updates>" },
+#ifdef SEND_EMAIL_CMD
   { CMD_notify_email,    "notify-email",    CONF_NEED_ARG, 1, conf_handler, "%s=<address to email if bad things happen>" },
+#endif
   { CMD_offline,         "offline",         CONF_NO_ARG,   1, conf_handler, "%s" },
   { CMD_retrys,          "retrys",          CONF_NEED_ARG, 1, conf_handler, "%s=<number of trys>" },
   { CMD_server,          "server",          CONF_NEED_ARG, 1, conf_handler, "%s=<server name>" },
@@ -633,7 +775,9 @@ void print_usage( void )
   fprintf(stdout, "  -L, --cloak_title <host>\tsome stupid thing for DHS only\n");
   fprintf(stdout, "  -m, --mx <mail exchange>\tstring to send as your mail exchange\n");
   fprintf(stdout, "  -M, --max-interval <# of sec>\tmax time in between updates\n");
+#ifdef SEND_EMAIL_CMD
   fprintf(stdout, "  -N, --notify-email <email>\taddress to send mail to if bad things happen\n");
+#endif
   fprintf(stdout, "  -o, --offline\t\t\tset to off line mode\n");
   fprintf(stdout, "  -p, --resolv-period <sec>\tperiod to check IP if it can't be resolved\n");
   fprintf(stdout, "  -P, --period <# of sec>\tperiod to check IP in daemon \n\t\t\t\tmode (default: 1800 seconds)\n");
@@ -656,16 +800,19 @@ void print_usage( void )
   fprintf(stdout, "  -u, --user <user[:passwd]>\tuser ID and password, if either is left blank \n\t\t\t\tthey will be prompted for\n");
   fprintf(stdout, "  -w, --wildcard\t\tset your domain to have a wildcard alias\n");
   fprintf(stdout, "  -z, --partner <partner>\tspecify easyDNS partner (for easydns-partner \n\t\t\t\tservices)\n");
+  fprintf(stdout, "  -1, --once\tin daemon mode, update once then exit\n");
   fprintf(stdout, "      --help\t\t\tdisplay this help and exit\n");
   fprintf(stdout, "      --version\t\t\toutput version information and exit\n");
   fprintf(stdout, "      --credits\t\t\tprint the credits and exit\n");
+#ifndef EMBED
   fprintf(stdout, "      --signalhelp\t\tprint help about signals\n");
+#endif
   fprintf(stdout, "\n");
 }
 
 void print_version( void )
 {
-  fprintf(stdout, "%s: - %s - $Id: ez-ipupdate.c,v 1.48 2001/07/17 00:49:41 amackay Exp $\n", program_name, VERSION);
+  fprintf(stdout, "%s: - %s - $Id: ez-ipupdate.c,v 1.1.1.1 2008/07/21 09:17:41 james26_jang Exp $\n", program_name, VERSION);
 }
 
 void print_credits( void )
@@ -680,6 +827,7 @@ void print_credits( void )
       "\n" );
 }
 
+#ifndef EMBED
 void print_signalhelp( void )
 {
   fprintf(stdout, "\nsignals are only really used when in daemon mode.\n\n");
@@ -689,6 +837,7 @@ void print_signalhelp( void )
   fprintf(stdout, "  QUIT\t\tshutdown\n");
   fprintf(stdout, "\n");
 }
+#endif
 
 #if HAVE_SIGNAL_H
 RETSIGTYPE sigint_handler(int sig)
@@ -731,7 +880,8 @@ int get_duration(char *str)
   else if(*multchar == 'y') { mult = 60*60*24*365; }
   else
   {
-    fprintf(stderr, "invalid multiplier: %c\n", *multchar);
+    show_message("invalid multiplier: %c\n", *multchar);
+#ifndef EMBED
     fprintf(stderr, "valid multipliers:\n");
     fprintf(stderr, "  %c -> %s (%d)\n", 'M', "Minute",    60);
     fprintf(stderr, "  %c -> %s (%d)\n", 'H', "Hour",      60*60);
@@ -740,6 +890,9 @@ int get_duration(char *str)
     fprintf(stderr, "  %c -> %s (%d)\n", 'f', "fortnight", 60*60*24*7*2);
     fprintf(stderr, "  %c -> %s (%d)\n", 'm', "month",     60*60*24*30);
     fprintf(stderr, "  %c -> %s (%d)\n", 'y', "year",      60*60*24*365);
+#else
+	fprintf(stderr, "valid multipliers: MHdwfmy\n");
+#endif
     exit(1);
   }
   save = *multchar;
@@ -776,6 +929,15 @@ char *chomp(char *buf)
   return(buf);
 }
 
+void get_input(char *prompt, char *buf, int buflen)
+{
+  printf("%s: ", prompt);
+  fflush(stdout);
+  *buf = '\0';
+  fgets(buf, buflen-1, stdin);
+  chomp(buf);
+}
+
 /*
  * show_message
  *
@@ -783,12 +945,13 @@ char *chomp(char *buf)
  * stderr.
  *
  */
+#ifdef REMOVE
 void show_message(char *fmt, ...)
 {
   va_list args; 
   va_start(args, fmt);
 
-  if(options & OPT_DAEMON && !(options & OPT_FOREGROUND))
+  if((options & OPT_DAEMON) && !(options & OPT_FOREGROUND))
   {
     char buf[MAX_MESSAGE_LEN];
 
@@ -798,7 +961,7 @@ void show_message(char *fmt, ...)
     sprintf(buf, "message incomplete because your OS sucks: %s\n", fmt);
 #endif
 
-    syslog(LOG_NOTICE, buf);
+    syslog(LOG_NOTICE, "%s", buf);
   }
   else
   {
@@ -811,6 +974,24 @@ void show_message(char *fmt, ...)
 
   va_end(args);
 }
+#else
+/*
+ * show_message
+ *
+ */
+void show_message(char *fmt, ...)
+{
+  va_list args;
+  char buf[512];
+
+  va_start(args, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, args);
+  openlog("ddns_update", 0, 0);
+  syslog(0, "%s", buf);
+  closelog();
+  va_end(args);
+}
+#endif
 
 /*
  * returns true if the string passed in is an internet address in dotted quad
@@ -866,7 +1047,7 @@ void parse_service(char *str)
       }
     }
   }
-  fprintf(stderr, "unknown service type: %s\n", str);
+  show_message("unknown service type: %s\n", str);
   fprintf(stderr, "try one of: \n");
   width = fprintf(stderr, "  ");
   for(i=0; i<ARRAY_LEN(services); i++)
@@ -894,9 +1075,23 @@ int option_handler(int id, char *optarg)
       dprintf((stderr, "address: %s\n", address));
       break;
 
+//2007.03.14 Yau add
+#ifdef ASUS_DDNS
+        case CMD_asus:
+                i = atoi (optarg);
+                if (i >= 0 && i <= 2)   {
+                        g_asus_ddns_mode = i;
+                        dprintf((stderr, "register domain mode %d\n", g_asus_ddns_mode));
+                }
+                break;
+#endif  // ASUS_DDNS
+
     case CMD_daemon:
       options |= OPT_DAEMON;
       dprintf((stderr, "daemon mode\n"));
+#if HAVE_GETPID
+      if(!pid_file) pid_file = strdup(PID_FILE);
+#endif
       break;
 
     case CMD_debug:
@@ -904,7 +1099,7 @@ int option_handler(int id, char *optarg)
       options |= OPT_DEBUG;
       dprintf((stderr, "debugging on\n"));
 #else
-      fprintf(stderr, "debugging was not enabled at compile time\n");
+      show_message("debugging was not enabled at compile time\n");
 #endif
       break;
 
@@ -916,7 +1111,7 @@ int option_handler(int id, char *optarg)
       sprintf(post_update_cmd, "%s ", optarg);
       dprintf((stderr, "post_update_cmd: %s\n", post_update_cmd));
 #else
-      fprintf(stderr, "command execution not enabled at compile time\n");
+      show_message("command execution not enabled at compile time\n");
       exit(1);
 #endif
       break;
@@ -932,7 +1127,7 @@ int option_handler(int id, char *optarg)
       pid_file = strdup(optarg);
       dprintf((stderr, "pid file: %s\n", pid_file));
 #else
-      fprintf(stderr, "pid file support not enabled at compile time\n");
+      show_message("pid file support not enabled at compile time\n");
 #endif
       break;
 
@@ -948,7 +1143,7 @@ int option_handler(int id, char *optarg)
       interface = strdup(optarg);
       dprintf((stderr, "interface: %s\n", interface));
 #else
-      fprintf(stderr, "interface lookup not enabled at compile time\n");
+      show_message("interface lookup not enabled at compile time\n");
       exit(1);
 #endif
       break;
@@ -963,18 +1158,20 @@ int option_handler(int id, char *optarg)
       max_interval = get_duration(optarg);
       if(max_interval < MIN_MAXINTERVAL)
       {
-        fprintf(stderr, "WARNING: max-interval of %d is too short, using %d\n",
+        show_message("WARNING: max-interval of %d is too short, using %d\n",
             max_interval, MIN_MAXINTERVAL);
         max_interval = MIN_MAXINTERVAL;
       }
       dprintf((stderr, "max_interval: %d\n", max_interval));
       break;
 
+#ifdef SEND_EMAIL_CMD
     case CMD_notify_email:
       if(notify_email) { free(notify_email); }
       notify_email = strdup(optarg);
       dprintf((stderr, "notify_email: %s\n", notify_email));
       break;
+#endif
 
     case CMD_offline:
       options |= OPT_OFFLINE;
@@ -985,7 +1182,7 @@ int option_handler(int id, char *optarg)
       update_period = get_duration(optarg);
       if(update_period < MIN_UPDATE_PERIOD)
       {
-        fprintf(stderr, "WARNING: period of %d is too short, using %d\n",
+        show_message("WARNING: period of %d is too short, using %d\n",
             update_period, MIN_UPDATE_PERIOD);
         update_period = MIN_UPDATE_PERIOD;
       }
@@ -996,7 +1193,7 @@ int option_handler(int id, char *optarg)
       resolv_period = get_duration(optarg);
       if(resolv_period < 1)
       {
-        fprintf(stderr, "WARNING: period of %d is too short, using %d\n",
+        show_message("WARNING: period of %d is too short, using %d\n",
             resolv_period, 1);
         resolv_period = 1;
       }
@@ -1068,18 +1265,18 @@ int option_handler(int id, char *optarg)
       {
         if(setgid(pw->pw_gid) != 0)
         {
-          fprintf(stderr, "error changing group id\n");
+          show_message("error changing group id\n");
         }
         dprintf((stderr, "GID now %d\n", pw->pw_gid));
         i = pw->pw_uid;
       }
       if(setuid(i) != 0)
       {
-        fprintf(stderr, "error changing user id\n");
+        show_message("error changing user id\n");
       }
       dprintf((stderr, "UID now %d\n", i));
 #else
-      fprintf(stderr, "option \"daemon-user\" not supported on this system\n");
+      show_message("option \"daemon-user\" not supported on this system\n");
 #endif
       break;
 
@@ -1093,18 +1290,18 @@ int option_handler(int id, char *optarg)
       {
         if(setegid(pw->pw_gid) != 0)
         {
-          fprintf(stderr, "error changing group id\n");
+          show_message("error changing group id\n");
         }
         dprintf((stderr, "GID now %d\n", pw->pw_gid));
         i = pw->pw_uid;
       }
       if(seteuid(i) != 0)
       {
-        fprintf(stderr, "error changing user id\n");
+        show_message("error changing user id\n");
       }
       dprintf((stderr, "UID now %d\n", i));
 #else
-      fprintf(stderr, "option \"daemon-euser\" not supported on this system\n");
+      show_message("option \"daemon-euser\" not supported on this system\n");
 #endif
       break;
 
@@ -1142,6 +1339,11 @@ int option_handler(int id, char *optarg)
       dprintf((stderr, "cache_file: %s\n", cache_file));
       break;
 
+    case CMD_once:
+      options |= OPT_ONCE;
+      dprintf((stderr, "update once only\n"));
+      break;
+
     default:
       dprintf((stderr, "case not handled: %d\n", id));
       break;
@@ -1166,6 +1368,10 @@ void parse_args( int argc, char **argv )
 {
 #ifdef HAVE_GETOPT_LONG
   struct option long_options[] = {
+//2007.03.14 Yau add
+#ifdef ASUS_DDNS
+      {"asus",                required_argument,      0, 'A'},
+#endif  // ASUS_DDNS
       {"address",         required_argument,      0, 'a'},
       {"cache-file",      required_argument,      0, 'b'},
       {"config_file",     required_argument,      0, 'c'},
@@ -1180,7 +1386,9 @@ void parse_args( int argc, char **argv )
       {"cloak_title",     required_argument,      0, 'L'},
       {"mx",              required_argument,      0, 'm'},
       {"max-interval",    required_argument,      0, 'M'},
+#ifdef SEND_EMAIL_CMD
       {"notify-email",    required_argument,      0, 'N'},
+#endif
       {"resolv-period",   required_argument,      0, 'p'},
       {"period",          required_argument,      0, 'P'},
       {"quiet",           no_argument,            0, 'q'},
@@ -1197,7 +1405,10 @@ void parse_args( int argc, char **argv )
       {"help",            no_argument,            0, 'H'},
       {"version",         no_argument,            0, 'V'},
       {"credits",         no_argument,            0, 'C'},
+#ifndef EMBED
       {"signalhelp",      no_argument,            0, 'Z'},
+#endif
+      {"once",            no_argument,            0, '1'},
       {0,0,0,0}
   };
 #else
@@ -1205,14 +1416,25 @@ void parse_args( int argc, char **argv )
 #endif
   int opt;
 
-  while((opt=xgetopt(argc, argv, "a:b:c:dDe:fF:g:h:i:L:m:M:N:o:p:P:qQ:r:R:s:S:t:T:U:u:wHVCZz:", 
-          long_options, NULL)) != -1)
+//2007.03.14 Yau add
+#ifdef ASUS_DDNS
+  while((opt=xgetopt(argc, argv, "A:a:b:c:dDe:fF:h:i:L:m:M:N:o:p:P:qr:R:s:S:t:T:U:u:wHVCZ", long_options, NULL)) != -1)
+#else   // !ASUS_DDNS
+  while((opt=xgetopt(argc, argv, "a:b:c:dDe:fF:h:i:L:m:M:N:o:p:P:qr:R:s:S:t:T:U:u:wHVCZ", long_options, NULL)) != -1)
+#endif  // ASUS_DDNS
   {
     switch (opt)
     {
       case 'a':
         option_handler(CMD_address, optarg);
         break;
+
+//2007.03.14 Yau add
+#ifdef ASUS_DDNS
+      case 'A':
+        option_handler(CMD_asus, optarg);
+        break;
+#endif  // ASUS_DDNS
 
       case 'b':
         option_handler(CMD_cache_file, optarg);
@@ -1226,7 +1448,7 @@ void parse_args( int argc, char **argv )
         {
           if(parse_conf_file(config_file, conf_commands) != 0)
           {
-            fprintf(stderr, "error parsing config file \"%s\"\n", config_file);
+            show_message("error parsing config file \"%s\"\n", config_file);
             exit(1);
           }
         }
@@ -1276,9 +1498,11 @@ void parse_args( int argc, char **argv )
         option_handler(CMD_max_interval, optarg);
         break;
 
+#ifdef SEND_EMAIL_CMD
       case 'N':
         option_handler(CMD_notify_email, optarg);
         break;
+#endif
 
       case 'o':
         option_handler(CMD_offline, optarg);
@@ -1351,13 +1575,19 @@ void parse_args( int argc, char **argv )
         exit(0);
         break;
 
+#ifndef EMBED
       case 'Z':
         print_signalhelp();
         exit(0);
         break;
+#endif
 
       case 'z':
         option_handler(CMD_partner, optarg);
+        break;
+
+      case '1':
+        option_handler(CMD_once, optarg);
         break;
 
       default:
@@ -1434,11 +1664,10 @@ int do_connect(int *sock, char *host, char *port)
     close(*sock);
     return(-1);
   }
-
   // print out some info
   if(!(options & OPT_QUIET))
   {
-    fprintf(stderr,
+    show_message(
         "connected to %s (%s) on port %d.\n",
         host,
         inet_ntoa(address.sin_addr),
@@ -1535,7 +1764,7 @@ void output(void *buf)
   }
   else if(ret == 0)
   {
-    fprintf(stderr, "timeout\n");
+    show_message("output timeout\n");
   }
   else
   {
@@ -1544,7 +1773,7 @@ void output(void *buf)
     {
       if(send(client_sockfd, buf, strlen(buf), 0) == -1)
       {
-        fprintf(stderr, "error send()ing request: %s\n", error_string);
+        show_message("error send()ing request: %s\n", error_string);
       }
     }
     else
@@ -1569,15 +1798,18 @@ int read_input(char *buf, int len)
   memcpy(&tv, &timeout, sizeof(struct timeval));
 
   ret = select(max_fd + 1, &readfds, NULL, NULL, &tv);
-  dprintf((stderr, "ret: %d\n", ret));
-
+  dprintf((stderr, "read_input ret: %d\n", ret));
+  fprintf(stderr, "read_input ret: %d\n", ret);
   if(ret == -1)
   {
     dprintf((stderr, "select: %s\n", error_string));
   }
   else if(ret == 0)
   {
-    fprintf(stderr, "timeout\n");
+    show_message("Server timeout\n");
+    nvram_set ("ddns_return_code", "Time-out");
+    nvram_set ("ddns_return_code_chk", "Time-out");
+    fprintf(stderr,"read_input: server timeout!\n");
   }
   else
   {
@@ -1590,7 +1822,7 @@ int read_input(char *buf, int len)
       dprintf((stderr, "got: %s\n", buf));
       if(bread == -1)
       {
-        fprintf(stderr, "error recv()ing reply: %s\n", error_string);
+        show_message("error recv()ing reply: %s\n", error_string);
       }
     }
     else
@@ -1609,14 +1841,7 @@ int get_if_addr(int sock, char *name, struct sockaddr_in *sin)
 
   memset(&ifr, 0, sizeof(ifr));
   strcpy(ifr.ifr_name, name);
-  /* why does this need to be done twice? */
-  if(ioctl(sock, SIOCGIFADDR, &ifr) < 0) 
-  { 
-    perror("ioctl(SIOCGIFADDR)"); 
-    memset(sin, 0, sizeof(struct sockaddr_in));
-    dprintf((stderr, "%s: %s\n", name, "unknown interface"));
-    return -1;
-  }
+  ifr.ifr_addr.sa_family = AF_INET;
   if(ioctl(sock, SIOCGIFADDR, &ifr) < 0)
   { 
     perror("ioctl(SIOCGIFADDR)"); 
@@ -1643,6 +1868,7 @@ int get_if_addr(int sock, char *name, struct sockaddr_in *sin)
 #endif
 }
 
+#ifdef CONFIG_PGP
 static int PGPOW_read_response(char *buf)
 {
   int bytes; 
@@ -1666,6 +1892,7 @@ static int PGPOW_read_response(char *buf)
     return(0);
   }
 }
+#endif
 
 static int ODS_read_response(char *buf, int len)
 {
@@ -1702,15 +1929,12 @@ int NULL_check_info(void)
 
   if(options & OPT_DAEMON)
   {
-    fprintf(stderr, "no compile time default service was set therefor you must "
+    show_message("no compile time default service was set therefor you must "
         "specify a service type.\n");
 
     return(-1);
   }
-  printf("service: ");
-  *buf = '\0';
-  fgets(buf, sizeof(buf), stdin);
-  chomp(buf);
+  get_input("service", buf, sizeof(buf));
   option_handler(CMD_service_type, buf);
 
   return(0);
@@ -1725,8 +1949,8 @@ int EZIP_check_info(void)
 
 int EZIP_update_entry(void)
 {
-  char buf[BUFFER_SIZE+1];
-  char *bp = buf;
+  char *buf = update_entry_buf;
+  char *bp;
   int bytes;
   int btot;
   int ret;
@@ -1801,7 +2025,7 @@ int EZIP_update_entry(void)
     case 200:
       if(!(options & OPT_QUIET))
       {
-        printf("request successful\n");
+        show_message("request successful\n");
       }
       break;
 
@@ -1810,7 +2034,7 @@ int EZIP_update_entry(void)
       {
         show_message("authentication failure\n");
       }
-      return(UPDATERES_SHUTDOWN);
+      return(UPDATERES_AUTHFAIL);
       break;
 
     default:
@@ -1820,7 +2044,161 @@ int EZIP_update_entry(void)
         *auth = '\0';
         sscanf(buf, " HTTP/1.%*c %*3d %255[^\r\n]", auth);
         show_message("unknown return code: %d\n", ret);
-        fprintf(stderr, "server response: %s\n", auth);
+        show_message("server response: %s\n", auth);
+      }
+      return(UPDATERES_ERROR);
+      break;
+  }
+
+  return(UPDATERES_OK);
+}
+
+int NOIP_check_info(void)
+{
+  char buf[BUFSIZ+1];
+
+  if ((host == NULL) || (*host == '\0'))
+  {
+    if (options & OPT_DAEMON)
+    {
+      return(-1);
+    }
+    if(host) { free(host); }
+    get_input("host", buf, sizeof(buf));
+    host = strdup(buf);
+  }
+
+  if (interface == NULL && address == NULL)
+  {
+    if(options & OPT_DAEMON)
+    {
+      show_message("you must provide either an interface or an address\n");
+      return(-1);
+    }
+    if(interface) { free(interface); }
+    get_input("interface", buf, sizeof(buf));
+    option_handler(CMD_interface, buf);
+  }
+
+  warn_fields(service->fields_used);
+
+  return 0;
+}
+
+int NOIP_update_entry(void)
+{
+  char *buf = update_entry_buf;
+  char *bp;
+  int bytes;
+  int btot;
+  int ret;
+
+  buf[BUFFER_SIZE] = '\0';
+
+  if(do_connect((int*)&client_sockfd, server, port) != 0)
+  {
+    if(!(options & OPT_QUIET))
+    {
+      show_message("error connecting to %s:%s\n", server, port);
+    }
+    return(UPDATERES_ERROR);
+  }
+
+  snprintf(buf, BUFFER_SIZE, "GET %s?", request);
+  output(buf);
+
+  snprintf(buf, BUFFER_SIZE, "%s=%s", "hostname", host);
+  output(buf);
+
+  if (address)
+  {
+    snprintf(buf, BUFFER_SIZE, "&%s=%s", "myip", address);
+    output(buf);
+  }
+
+  if (options & OPT_OFFLINE)
+  {
+    snprintf(buf, BUFFER_SIZE, "&%s=%s", "offline", "yes");
+    output(buf);
+  }
+  snprintf(buf, BUFFER_SIZE, "&%s=%s", "wildcard", wildcard ? "yes" : "no");
+  output(buf);
+
+  snprintf(buf, BUFFER_SIZE, "&%s=%s", "mx", mx);
+  output(buf);
+
+  //snprintf(buf, BUFFER_SIZE, "&%s=%s", "url", url);
+  //output(buf);
+
+  snprintf(buf, BUFFER_SIZE, " HTTP/1.0\015\012");
+  output(buf);
+
+  snprintf(buf, BUFFER_SIZE, "Host: %s\015\012", server);
+  output(buf);
+
+  snprintf(buf, BUFFER_SIZE, "Authorization: Basic %s\015\012", auth);
+  output(buf);
+
+  snprintf(buf, BUFFER_SIZE, "User-Agent: %s-%s %s [%s] (%s)\015\012", 
+      "ez-update", VERSION, OS, (options & OPT_DAEMON) ? "daemon" : "", "by Angus Mackay");
+  output(buf);
+
+  snprintf(buf, BUFFER_SIZE, "\015\012");
+  output(buf);
+
+  bp = buf;
+  bytes = 0;
+  btot = 0;
+  while ((bytes=read_input(bp, BUFFER_SIZE-btot)) > 0)
+  {
+    bp += bytes;
+    btot += bytes;
+    dprintf((stderr, "btot: %d\n", btot));
+  }
+
+  close(client_sockfd);
+  buf[btot] = '\0';
+
+  dprintf((stderr, "server output: %s\n", buf));
+
+  if(sscanf(buf, " HTTP/1.%*c %3d", &ret) != 1)
+  {
+    ret = -1;
+  }
+
+  switch(ret)
+  {
+    case -1:
+      if(!(options & OPT_QUIET))
+      {
+        show_message("strange server response, are you connecting to the right server?\n");
+      }
+      return(UPDATERES_ERROR);
+      break;
+
+    case 200:
+      if(!(options & OPT_QUIET))
+      {
+        show_message("request successful\n");
+      }
+      break;
+
+    case 401:
+      if(!(options & OPT_QUIET))
+      {
+        show_message("authentication failure\n");
+      }
+      return(UPDATERES_AUTHFAIL);
+      break;
+
+    default:
+      if(!(options & OPT_QUIET))
+      {
+        // reuse the auth buffer
+        *auth = '\0';
+        sscanf(buf, " HTTP/1.%*c %*3d %255[^\r\n]", auth);
+        show_message("unknown return code: %d\n", ret);
+        show_message("server response: %s\n", auth);
       }
       return(UPDATERES_ERROR);
       break;
@@ -1852,16 +2230,13 @@ int DYNDNS_check_info(void)
       return(-1);
     }
     if(host) { free(host); }
-    printf("host: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
+    get_input("host", buf, sizeof(buf));
     host = strdup(buf);
-    chomp(host);
   }
 
   if(address != NULL && !is_dotted_quad(address))
   {
-    fprintf(stderr, "the IP address \"%s\" is invalid\n", address);
+    show_message("the IP address \"%s\" is invalid\n", address);
     return(-1);
   }
 
@@ -1869,14 +2244,11 @@ int DYNDNS_check_info(void)
   {
     if(options & OPT_DAEMON)
     {
-      fprintf(stderr, "you must provide either an interface or an address\n");
+      show_message("you must provide either an interface or an address\n");
       return(-1);
     }
     if(interface) { free(interface); }
-    printf("interface: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
-    chomp(buf);
+    get_input("interface", buf, sizeof(buf));
     option_handler(CMD_interface, buf);
   }
 
@@ -1887,12 +2259,12 @@ int DYNDNS_check_info(void)
 
 int DYNDNS_update_entry(void)
 {
-  char buf[BUFFER_SIZE+1];
+  char *buf = update_entry_buf;
   char *bp = buf;
   int bytes;
   int btot;
   int ret;
-  int retval = UPDATERES_OK;
+  int retval = UPDATERES_OK; 
 
   buf[BUFFER_SIZE] = '\0';
 
@@ -1964,7 +2336,7 @@ int DYNDNS_update_entry(void)
   close(client_sockfd);
   buf[btot] = '\0';
 
-  dprintf((stderr, "server output: %s\n", buf));
+  //show_message("server output: %s\n", buf);//Yaudbg
 
   if(sscanf(buf, " HTTP/1.%*c %3d", &ret) != 1)
   {
@@ -1986,7 +2358,7 @@ int DYNDNS_update_entry(void)
       {
         if(!(options & OPT_QUIET))
         {
-          printf("request successful\n");
+          show_message("request successful\n");
         }
       }
       else
@@ -2025,7 +2397,7 @@ int DYNDNS_update_entry(void)
         else if(strstr(buf, "\nbadauth") != NULL)
         {
           show_message("authentication failure\n");
-          retval = UPDATERES_SHUTDOWN;
+          retval = UPDATERES_AUTHFAIL;
         }
         else if(strstr(buf, "\nbadsys") != NULL)
         {
@@ -2106,7 +2478,7 @@ int DYNDNS_update_entry(void)
           show_message("error processing request\n");
           if(!(options & OPT_QUIET))
           {
-            fprintf(stderr, "==== server output: ====\n%s\n", buf);
+            show_message("server output: %s\n", buf);
           }
           retval = UPDATERES_ERROR;
         }
@@ -2118,7 +2490,7 @@ int DYNDNS_update_entry(void)
       {
         show_message("authentication failure\n");
       }
-      retval = UPDATERES_SHUTDOWN;
+      retval = UPDATERES_AUTHFAIL;
       break;
 
     default:
@@ -2128,7 +2500,7 @@ int DYNDNS_update_entry(void)
         *auth = '\0';
         sscanf(buf, " HTTP/1.%*c %*3d %255[^\r\n]", auth);
         show_message("unknown return code: %d\n", ret);
-        fprintf(stderr, "server response: %s\n", auth);
+        show_message("server response: %s\n", auth);
       }
       retval = UPDATERES_ERROR;
       break;
@@ -2137,6 +2509,7 @@ int DYNDNS_update_entry(void)
   return(retval);
 }
 
+#ifdef CONFIG_PGP
 int PGPOW_check_info(void)
 {
   char buf[BUFSIZ+1];
@@ -2148,25 +2521,19 @@ int PGPOW_check_info(void)
       return(-1);
     }
     if(host) { free(host); }
-    printf("host: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
+    get_input("host", buf, sizeof(buf));
     host = strdup(buf);
-    chomp(host);
   }
 
   if(interface == NULL && address == NULL)
   {
     if(options & OPT_DAEMON)
     {
-      fprintf(stderr, "you must provide either an interface or an address\n");
+      show_message("you must provide either an interface or an address\n");
       return(-1);
     }
     if(interface) { free(interface); }
-    printf("interface: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
-    chomp(buf);
+    get_input("interface", buf, sizeof(buf));
     option_handler(CMD_interface, buf);
   }
 
@@ -2177,7 +2544,7 @@ int PGPOW_check_info(void)
 
 int PGPOW_update_entry(void)
 {
-  char buf[BUFFER_SIZE+1];
+  char *buf = update_entry_buf;
 
   buf[BUFFER_SIZE] = '\0';
 
@@ -2330,13 +2697,15 @@ int PGPOW_update_entry(void)
 
   if(!(options & OPT_QUIET))
   {
-    printf("request successful\n");
+    show_message("request successful\n");
   }
 
   close(client_sockfd);
   return(UPDATERES_OK);
 }
+#endif
 
+#ifdef CONFIG_DHS
 int DHS_check_info(void)
 {
   char buf[BUFSIZ+1];
@@ -2348,24 +2717,19 @@ int DHS_check_info(void)
       return(-1);
     }
     if(host) { free(host); }
-    printf("host: ");
-    fgets(buf, BUFSIZ, stdin);
+    get_input("host", buf, sizeof(buf));
     host = strdup(buf);
-    chomp(host);
   }
 
   if(interface == NULL && address == NULL)
   {
     if(options & OPT_DAEMON)
     {
-      fprintf(stderr, "you must provide either an interface or an address\n");
+      show_message("you must provide either an interface or an address\n");
       return(-1);
     }
     if(interface) { free(interface); }
-    printf("interface: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
-    chomp(buf);
+    get_input("interface", buf, sizeof(buf));
     option_handler(CMD_interface, buf);
   }
 
@@ -2382,8 +2746,8 @@ int DHS_check_info(void)
  */
 int DHS_update_entry(void)
 {
-  char buf[BUFFER_SIZE+1];
-  char putbuf[BUFFER_SIZE+1];
+  char *buf = update_entry_buf;
+  char *putbuf = update_entry_putbuf;
   char *bp = buf;
   int bytes;
   int btot;
@@ -2524,7 +2888,7 @@ int DHS_update_entry(void)
     case 200:
       if(!(options & OPT_QUIET))
       {
-        printf("request successful\n");
+        show_message("request successful\n");
       }
       break;
 
@@ -2533,7 +2897,7 @@ int DHS_update_entry(void)
       {
         show_message("authentication failure\n");
       }
-      retval = UPDATERES_SHUTDOWN;
+      retval = UPDATERES_AUTHFAIL;
       break;
 
     default:
@@ -2661,7 +3025,7 @@ int DHS_update_entry(void)
       case 200:
         if(!(options & OPT_QUIET))
         {
-          printf("request successful\n");
+          show_message("request successful\n");
         }
         break;
 
@@ -2670,7 +3034,7 @@ int DHS_update_entry(void)
         {
           show_message("authentication failure\n");
         }
-        retval = UPDATERES_SHUTDOWN;
+        retval = UPDATERES_AUTHFAIL;
         break;
 
       default:
@@ -2689,7 +3053,9 @@ int DHS_update_entry(void)
 
   return(retval);
 }
+#endif
 
+#ifdef CONFIG_ODS
 int ODS_check_info(void)
 {
   char buf[BUFSIZ+1];
@@ -2701,18 +3067,15 @@ int ODS_check_info(void)
       return(-1);
     }
     if(host) { free(host); }
-    printf("host: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
+    get_input("host", buf, sizeof(buf));
     host = strdup(buf);
-    chomp(host);
   }
 
   if(interface == NULL && address == NULL)
   {
     if(options & OPT_DAEMON)
     {
-      fprintf(stderr, "you must provide either an interface or an address\n");
+      show_message("you must provide either an interface or an address\n");
       return(-1);
     }
     if(address) { free(address); }
@@ -2726,7 +3089,7 @@ int ODS_check_info(void)
 
 int ODS_update_entry(void)
 {
-  char buf[BUFFER_SIZE+1];
+  char *buf = update_entry_buf;
   int response;
 
   buf[BUFFER_SIZE] = '\0';
@@ -2741,7 +3104,7 @@ int ODS_update_entry(void)
   }
 
   /* read server message */
-  if(ODS_read_response(buf, sizeof(buf)) != 100)
+  if(ODS_read_response(buf, BUFFER_SIZE) != 100)
   {
     show_message("strange server response, are you connecting to the right server?\n");
     close(client_sockfd);
@@ -2752,7 +3115,7 @@ int ODS_update_entry(void)
   snprintf(buf, BUFFER_SIZE, "LOGIN %s %s\012", user_name, password);
   output(buf);
 
-  response = ODS_read_response(buf, sizeof(buf));
+  response = ODS_read_response(buf, BUFFER_SIZE);
   if(!(response == 225 || response == 226))
   {
     if(strlen(buf) > 4)
@@ -2771,7 +3134,7 @@ int ODS_update_entry(void)
   snprintf(buf, BUFFER_SIZE, "DELRR %s A\012", host);
   output(buf);
 
-  if(ODS_read_response(buf, sizeof(buf)) != 901)
+  if(ODS_read_response(buf, BUFFER_SIZE) != 901)
   {
     if(strlen(buf) > 4)
     {
@@ -2790,7 +3153,7 @@ int ODS_update_entry(void)
                 *address == '\0' ? "CONNIP" :  address);
   output(buf);
 
-  response = ODS_read_response(buf, sizeof(buf));
+  response = ODS_read_response(buf, BUFFER_SIZE);
   if(!(response == 795 || response == 796))
   {
     if(strlen(buf) > 4)
@@ -2807,12 +3170,13 @@ int ODS_update_entry(void)
 
   if(!(options & OPT_QUIET))
   {
-    printf("request successful\n");
+    show_message("request successful\n");
   }
 
   close(client_sockfd);
   return(UPDATERES_OK);
 }
+#endif
 
 int TZO_check_info(void)
 {
@@ -2825,25 +3189,19 @@ int TZO_check_info(void)
       return(-1);
     }
     if(host) { free(host); }
-    printf("host: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
+    get_input("host", buf, sizeof(buf));
     host = strdup(buf);
-    chomp(host);
   }
 
   if(interface == NULL && address == NULL)
   {
     if(options & OPT_DAEMON)
     {
-      fprintf(stderr, "you must provide either an interface or an address\n");
+      show_message("you must provide either an interface or an address\n");
       return(-1);
     }
     if(interface) { free(interface); }
-    printf("interface: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
-    chomp(buf);
+    get_input("interface", buf, sizeof(buf));
     option_handler(CMD_interface, buf);
   }
 
@@ -2854,7 +3212,7 @@ int TZO_check_info(void)
 
 int TZO_update_entry(void)
 {
-  char buf[BUFFER_SIZE+1];
+  char *buf = update_entry_buf;
   char *bp = buf;
   int bytes;
   int btot;
@@ -2923,7 +3281,7 @@ int TZO_update_entry(void)
     case 200:
       if(!(options & OPT_QUIET))
       {
-        printf("request successful\n");
+        show_message("request successful\n");
       }
       break;
 
@@ -2944,7 +3302,7 @@ int TZO_update_entry(void)
         {
           bp = "";
         }
-        dprintf((stderr, "location: %s\n", bp));
+        fprintf(stderr, "location: %s\n", bp);
 
         if(!(strncmp(bp, "domainmismatch.htm", strlen(bp)) && strncmp(bp, "invname.htm", strlen(bp))))
         {
@@ -2993,25 +3351,19 @@ int EASYDNS_check_info(void)
       return(-1);
     }
     if(host) { free(host); }
-    printf("host: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
+    get_input("host", buf, sizeof(buf));
     host = strdup(buf);
-    chomp(host);
   }
 
   if(interface == NULL && address == NULL)
   {
     if(options & OPT_DAEMON)
     {
-      fprintf(stderr, "you must provide either an interface or an address\n");
+      show_message("you must provide either an interface or an address\n");
       return(-1);
     }
     if(interface) { free(interface); }
-    printf("interface: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
-    chomp(buf);
+    get_input("interface", buf, sizeof(buf));
     option_handler(CMD_interface, buf);
   }
 
@@ -3022,7 +3374,7 @@ int EASYDNS_check_info(void)
 
 int EASYDNS_update_entry(void)
 {
-  char buf[BUFFER_SIZE+1];
+  char *buf = update_entry_buf;
   char *bp = buf;
   int bytes;
   int btot;
@@ -3100,7 +3452,7 @@ int EASYDNS_update_entry(void)
       {
         if(!(options & OPT_QUIET))
         {
-          printf("request successful\n");
+          show_message("request successful\n");
         }
       }
       else
@@ -3108,7 +3460,7 @@ int EASYDNS_update_entry(void)
         show_message("error processing request\n");
         if(!(options & OPT_QUIET))
         {
-          fprintf(stderr, "server output: %s\n", buf);
+          show_message("server output: %s\n", buf);
         }
         return(UPDATERES_ERROR);
       }
@@ -3119,7 +3471,7 @@ int EASYDNS_update_entry(void)
       {
         show_message("authentication failure\n");
       }
-      return(UPDATERES_SHUTDOWN);
+      return(UPDATERES_AUTHFAIL);
       break;
 
     default:
@@ -3149,11 +3501,8 @@ int EASYDNS_PARTNER_check_info(void)
       return(-1);
     }
     if(host) { free(host); }
-    printf("host: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
+    get_input("host", buf, sizeof(buf));
     host = strdup(buf);
-    chomp(host);
   }
 
   if((partner == NULL) || (*partner == '\0'))
@@ -3163,25 +3512,19 @@ int EASYDNS_PARTNER_check_info(void)
       return(-1);
     }
     if(partner) { free(partner); }
-    printf("easyDNS partner: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
+    get_input("easyDNS partner", buf, sizeof(buf));
     partner = strdup(buf);
-    chomp(partner);
   }
 
   if(interface == NULL && address == NULL)
   {
     if(options & OPT_DAEMON)
     {
-      fprintf(stderr, "you must provide either an interface or an address\n");
+      show_message("you must provide either an interface or an address\n");
       return(-1);
     }
     if(interface) { free(interface); }
-    printf("interface: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
-    chomp(buf);
+    get_input("interface", buf, sizeof(buf));
     option_handler(CMD_interface, buf);
   }
 
@@ -3192,7 +3535,7 @@ int EASYDNS_PARTNER_check_info(void)
 
 int EASYDNS_PARTNER_update_entry(void)
 {
-  char buf[BUFFER_SIZE+1];
+  char *buf = update_entry_buf;
   char *bp = buf;
   int bytes;
   int btot;
@@ -3268,7 +3611,7 @@ int EASYDNS_PARTNER_update_entry(void)
       {
         if(!(options & OPT_QUIET))
         {
-          printf("request successful\n");
+          show_message("request successful\n");
         }
       }
       else
@@ -3276,7 +3619,7 @@ int EASYDNS_PARTNER_update_entry(void)
         show_message("error processing request\n");
         if(!(options & OPT_QUIET))
         {
-          fprintf(stderr, "server output: %s\n", buf);
+          show_message("server output: %s\n", buf);
         }
         return(UPDATERES_ERROR);
       }
@@ -3287,7 +3630,7 @@ int EASYDNS_PARTNER_update_entry(void)
       {
         show_message("authentication failure\n");
       }
-      return(UPDATERES_SHUTDOWN);
+      return(UPDATERES_AUTHFAIL);
       break;
 
     case 403:
@@ -3334,6 +3677,7 @@ int EASYDNS_PARTNER_update_entry(void)
 
 
 #ifdef USE_MD5
+#ifdef GNUDIP
 int GNUDIP_check_info(void)
 {
   char buf[BUFSIZ+1];
@@ -3345,11 +3689,8 @@ int GNUDIP_check_info(void)
       return(-1);
     }
     if(server) { free(server); }
-    printf("server: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
+    get_input("server", buf, sizeof(buf));
     server = strdup(buf);
-    chomp(server);
   }
 
   if((host == NULL) || (*host == '\0'))
@@ -3359,18 +3700,15 @@ int GNUDIP_check_info(void)
       return(-1);
     }
     if(host) { free(host); }
-    printf("host: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
+    get_input("host", buf, sizeof(buf));
     host = strdup(buf);
-    chomp(host);
   }
 
   if((address) && (strcmp(address, "0.0.0.0") != 0))
   {
     if(!(options & OPT_QUIET))
     {
-      fprintf(stderr, "warning: for GNUDIP the \"address\" parpameter is only used if set to \"0.0.0.0\" thus making an offline request.\n");
+      show_message("warning: for GNUDIP the \"address\" parpameter is only used if set to \"0.0.0.0\" thus making an offline request.\n");
     }
   }
 
@@ -3381,8 +3719,8 @@ int GNUDIP_check_info(void)
 
 int GNUDIP_update_entry(void)
 {
+  char *buf = update_entry_buf;
   unsigned char digestbuf[MD5_DIGEST_BYTES];
-  char buf[BUFFER_SIZE+1];
   char *p;
   int bytes;
   int ret;
@@ -3478,7 +3816,7 @@ int GNUDIP_update_entry(void)
     case 0:
       if(!(options & OPT_QUIET))
       {
-        printf("update request successful\n");
+        show_message("update request successful\n");
       }
       break;
 
@@ -3493,7 +3831,7 @@ int GNUDIP_update_entry(void)
     case 2:
       if(!(options & OPT_QUIET))
       {
-        fprintf(stderr, "offline request successful\n");
+        show_message("offline request successful\n");
       }
       break;
 
@@ -3509,7 +3847,9 @@ int GNUDIP_update_entry(void)
   return(UPDATERES_OK);
 }
 #endif
+#endif
 
+#ifdef CONFIG_PGP
 int JUSTL_check_info(void)
 {
   char buf[BUFSIZ+1];
@@ -3520,10 +3860,7 @@ int JUSTL_check_info(void)
     {
       return(-1);
     }
-    printf("host: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
-    chomp(buf);
+    get_input("host", buf, sizeof(buf));
     host = strdup(buf);
   }
 
@@ -3531,14 +3868,11 @@ int JUSTL_check_info(void)
   {
     if(options & OPT_DAEMON)
     {
-      fprintf(stderr, "you must provide either an interface or an address\n");
+      show_message("you must provide either an interface or an address\n");
       return(-1);
     }
     if(interface) { free(interface); }
-    printf("interface: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
-    chomp(buf);
+    get_input("interface", buf, sizeof(buf));
     option_handler(CMD_interface, buf);
   }
 
@@ -3549,7 +3883,7 @@ int JUSTL_check_info(void)
 
 int JUSTL_update_entry(void)
 {
-  char buf[BUFFER_SIZE+1];
+  char *buf = update_entry_buf;
   char *bp = buf;
   int bytes;
   int btot;
@@ -3622,7 +3956,7 @@ int JUSTL_update_entry(void)
       {
         if(!(options & OPT_QUIET))
         {
-          printf("request successful\n");
+          show_message("request successful\n");
         }
       }
       else
@@ -3630,7 +3964,7 @@ int JUSTL_update_entry(void)
         show_message("error processing request\n");
         if(!(options & OPT_QUIET))
         {
-          fprintf(stderr, "server output: %s\n", buf);
+          show_message("server output: %s\n", buf);
         }
         return(UPDATERES_ERROR);
       }
@@ -3641,7 +3975,7 @@ int JUSTL_update_entry(void)
       {
         show_message("authentication failure\n");
       }
-      return(UPDATERES_SHUTDOWN);
+      return(UPDATERES_AUTHFAIL);
       break;
 
     default:
@@ -3659,6 +3993,7 @@ int JUSTL_update_entry(void)
 
   return(UPDATERES_OK);
 }
+#endif
 
 int DYNS_check_info(void)
 {
@@ -3670,10 +4005,7 @@ int DYNS_check_info(void)
     {
       return(-1);
     }
-    printf("host: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
-    chomp(buf);
+    get_input("host", buf, sizeof(buf));
     host = strdup(buf);
   }
 
@@ -3681,14 +4013,11 @@ int DYNS_check_info(void)
   {
     if(options & OPT_DAEMON)
     {
-      fprintf(stderr, "you must provide either an interface or an address\n");
+      show_message("you must provide either an interface or an address\n");
       return(-1);
     }
     if(interface) { free(interface); }
-    printf("interface: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
-    chomp(buf);
+    get_input("interface", buf, sizeof(buf));
     option_handler(CMD_interface, buf);
   }
 
@@ -3699,7 +4028,7 @@ int DYNS_check_info(void)
 
 int DYNS_update_entry(void)
 {
-  char buf[BUFFER_SIZE+1];
+  char *buf = update_entry_buf;
   char *bp = buf;
   int bytes;
   int btot;
@@ -3773,28 +4102,28 @@ int DYNS_update_entry(void)
       {
         if(!(options & OPT_QUIET))
         {
-          printf("request successful\n");
+          show_message("request successful\n");
         }
       }
       else if(strstr(buf, "400 Bad Request") != NULL)
       {
         if(!(options & OPT_QUIET))
         {
-          printf("bad request\n");
+          show_message("bad request\n");
         }
       }
       else if(strstr(buf, "401 User") != NULL)
       {
         if(!(options & OPT_QUIET))
         {
-          printf("authentication failure (username/password)\n");
+          show_message("authentication failure (username/password)\n");
         }
       }
       else if(strstr(buf, "405 Hostname") != NULL)
       {
         if(!(options & OPT_QUIET))
         {
-          printf("authentication failure (hostname not found)\n");
+          show_message("authentication failure (hostname not found)\n");
         }
       }
 
@@ -3803,7 +4132,7 @@ int DYNS_update_entry(void)
         show_message("error processing request\n");
         if(!(options & OPT_QUIET))
         {
-          fprintf(stderr, "server output: %s\n", buf);
+          show_message("server output: %s\n", buf);
         }
         return(UPDATERES_ERROR);
       }
@@ -3815,7 +4144,7 @@ int DYNS_update_entry(void)
       {
         show_message("authentication failure\n");
       }
-      return(UPDATERES_ERROR);
+      return(UPDATERES_AUTHFAIL);
       break;
 
     default:
@@ -3834,6 +4163,7 @@ int DYNS_update_entry(void)
   return(UPDATERES_OK);
 }
 
+#ifdef CONFIG_HN
 int HN_check_info(void)
 {
   warn_fields(service->fields_used);
@@ -3843,7 +4173,7 @@ int HN_check_info(void)
 
 int HN_update_entry(void)
 {
-  char buf[BUFFER_SIZE+1];
+  char *buf = update_entry_buf;
   char *bp = buf;
   int bytes;
   int btot;
@@ -3938,7 +4268,7 @@ int HN_update_entry(void)
         case 101:
           if(!(options & OPT_QUIET))
           {
-            printf("request successful\n");
+            show_message("request successful\n");
           }
           break;
 
@@ -3966,7 +4296,7 @@ int HN_update_entry(void)
           if(!(options & OPT_QUIET))
           {
             show_message("unknown return code: %d\n", ret);
-            fprintf(stderr, "server response: %s\n", buf);
+            show_message("server response: %s\n", buf);
           }
           return(UPDATERES_ERROR);
           break;
@@ -3978,7 +4308,7 @@ int HN_update_entry(void)
       {
         show_message("authentication failure\n");
       }
-      return(UPDATERES_SHUTDOWN);
+      return(UPDATERES_AUTHFAIL);
       break;
 
     default:
@@ -3988,7 +4318,7 @@ int HN_update_entry(void)
         *auth = '\0';
         sscanf(buf, " HTTP/1.%*c %*3d %255[^\r\n]", auth);
         show_message("unknown return code: %d\n", ret);
-        fprintf(stderr, "server response: %s\n", auth);
+        show_message("server response: %s\n", auth);
       }
       return(UPDATERES_ERROR);
       break;
@@ -3996,6 +4326,7 @@ int HN_update_entry(void)
 
   return(UPDATERES_OK);
 }
+#endif
 
 int ZONEEDIT_check_info(void)
 {
@@ -4008,11 +4339,8 @@ int ZONEEDIT_check_info(void)
       return(-1);
     }
     if(host) { free(host); }
-    printf("host: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
+    get_input("host", buf, sizeof(buf));
     host = strdup(buf);
-    chomp(host);
   }
 
   warn_fields(service->fields_used);
@@ -4022,7 +4350,7 @@ int ZONEEDIT_check_info(void)
 
 int ZONEEDIT_update_entry(void)
 {
-  char buf[BUFFER_SIZE+1];
+  char *buf = update_entry_buf;
   char *bp = buf;
   int bytes;
   int btot;
@@ -4097,7 +4425,7 @@ int ZONEEDIT_update_entry(void)
       {
         if(!(options & OPT_QUIET))
         {
-          printf("request successful\n");
+          show_message("request successful\n");
         }
       }
       else
@@ -4105,7 +4433,7 @@ int ZONEEDIT_update_entry(void)
         show_message("error processing request\n");
         if(!(options & OPT_QUIET))
         {
-          fprintf(stderr, "server output: %s\n", buf);
+          show_message("server output: %s\n", buf);
         }
         return(UPDATERES_ERROR);
       }
@@ -4116,7 +4444,7 @@ int ZONEEDIT_update_entry(void)
       {
         show_message("authentication failure\n");
       }
-      return(UPDATERES_SHUTDOWN);
+      return(UPDATERES_AUTHFAIL);
       break;
 
     default:
@@ -4135,6 +4463,7 @@ int ZONEEDIT_update_entry(void)
   return(UPDATERES_OK);
 }
 
+#ifdef USE_MD5
 int HEIPV6TB_check_info(void)
 {
   char buf[BUFSIZ+1];
@@ -4143,16 +4472,20 @@ int HEIPV6TB_check_info(void)
   {
     if(options & OPT_DAEMON)
     {
-      fprintf(stderr, "you must provide either an interface or an address\n");
+      show_message("you must provide either an interface or an address\n");
       return(-1);
     }
     if(interface) { free(interface); }
-    printf("interface: ");
-    *buf = '\0';
-    fgets(buf, BUFSIZ, stdin);
-    chomp(buf);
+    get_input("interface", buf, sizeof(buf));
     option_handler(CMD_interface, buf);
   }
+
+  if((host == NULL) || (*host == '\0'))
+  {
+    show_message("you must provide global tunnel id in 'host' param\n");
+    return(-1);
+  }
+
   warn_fields(service->fields_used);
 
   return 0;
@@ -4160,8 +4493,9 @@ int HEIPV6TB_check_info(void)
 
 int HEIPV6TB_update_entry(void)
 {
-  char buf[BUFFER_SIZE+1];
-  char *bp = buf;
+  unsigned char digestbuf[MD5_DIGEST_BYTES];
+  char *buf = update_entry_buf;
+  char *bp;
   int bytes;
   int btot;
   int ret;
@@ -4177,13 +4511,22 @@ int HEIPV6TB_update_entry(void)
     return(UPDATERES_ERROR);
   }
 
-  snprintf(buf, BUFFER_SIZE, "GET %s?menu=%s&", request, "edit_tunnel_address");
+  // use the auth buffer
+  md5_buffer(password, strlen(password), digestbuf);
+  for(bytes = 0, bp = auth; bytes < MD5_DIGEST_BYTES; bytes++)
+  {
+    bp += sprintf(bp, "%02x", digestbuf[bytes]);
+  }
+
+  snprintf(buf, BUFFER_SIZE, "GET %s?", request);
   output(buf);
-  snprintf(buf, BUFFER_SIZE, "aname=%s&", user_name);
+  snprintf(buf, BUFFER_SIZE, "ip=%s&", (address && *address) ? address : "AUTO");
   output(buf);
-  snprintf(buf, BUFFER_SIZE, "auth=%s&", password);
+  snprintf(buf, BUFFER_SIZE, "apikey=%s&", user_name);
   output(buf);
-  snprintf(buf, BUFFER_SIZE, "ipv4b=%s", address);
+  snprintf(buf, BUFFER_SIZE, "pass=%s&", auth);
+  output(buf);
+  snprintf(buf, BUFFER_SIZE, "tid=%s&", host);
   output(buf);
   snprintf(buf, BUFFER_SIZE, " HTTP/1.0\015\012");
   output(buf);
@@ -4208,6 +4551,7 @@ int HEIPV6TB_update_entry(void)
   buf[btot] = '\0';
 
   dprintf((stderr, "server output: %s\n", buf));
+
   if(sscanf(buf, " HTTP/1.%*c %3d", &ret) != 1)
   {
     ret = -1;
@@ -4215,8 +4559,6 @@ int HEIPV6TB_update_entry(void)
 
   switch(ret)
   {
-    char *p;
-
     case -1:
       if(!(options & OPT_QUIET))
       {
@@ -4224,12 +4566,36 @@ int HEIPV6TB_update_entry(void)
       }
       return(UPDATERES_ERROR);
       break;
+
     case 200:
       if(!(options & OPT_QUIET))
       {
-        printf("request successful\n");
+        // reuse the auth buffer
+        *auth = '\0';
+        if ((bp = strstr(buf, "+OK:")) != NULL)
+          sscanf(bp, "+OK%255[^\r\n]", auth);
+        else if ((bp = strstr(buf, "-ERROR:")) != NULL)
+          sscanf(bp, "-ERROR%255[^\r\n]", auth);
+      }
+      if(strstr(buf, "+OK:") != NULL ||
+         strstr(buf, "endpoint updated") != NULL ||
+         strstr(buf, "tunnel is already") != NULL)
+      {
+        if(!(options & OPT_QUIET))
+        {
+          show_message("request successful%s\n", auth);
+        }
+      }
+      else
+      {
+        if(!(options & OPT_QUIET))
+        {
+          show_message("bad request%s\n", auth);
+        }
+        return(UPDATERES_ERROR);
       }
       break;
+
     default:
       if(!(options & OPT_QUIET))
       {
@@ -4237,7 +4603,7 @@ int HEIPV6TB_update_entry(void)
         *auth = '\0';
         sscanf(buf, " HTTP/1.%*c %*3d %255[^\r\n]", auth);
         show_message("unknown return code: %d\n", ret);
-        fprintf(stderr, "server response: %s\n", auth);
+        show_message("server response: %s\n", auth);
       }
       return(UPDATERES_ERROR);
       break;
@@ -4245,6 +4611,7 @@ int HEIPV6TB_update_entry(void)
 
   return(UPDATERES_OK);
 }
+#endif
 
 static int is_in_list(char *needle, char **haystack)
 {
@@ -4267,27 +4634,27 @@ void warn_fields(char **okay_fields)
 {
   if(wildcard != 0 && !is_in_list("wildcard", okay_fields))
   {
-    fprintf(stderr, "warning: this service does not support the %s option\n",
+    show_message("warning: this service does not support the %s option\n",
         "wildcard");
   }
   if(!(mx == NULL || *mx == '\0') && !is_in_list("mx", okay_fields))
   {
-    fprintf(stderr, "warning: this service does not support the %s option\n",
+    show_message("warning: this service does not support the %s option\n",
         "mx");
   }
   if(!(url == NULL || *url == '\0') && !is_in_list("url", okay_fields))
   {
-    fprintf(stderr, "warning: this service does not support the %s option\n",
+    show_message("warning: this service does not support the %s option\n",
         "url");
   }
   if(!(cloak_title == NULL || *cloak_title == '\0') && !is_in_list("cloak_title", okay_fields))
   {
-    fprintf(stderr, "warning: this service does not support the %s option\n",
+    show_message("warning: this service does not support the %s option\n",
         "cloak_title");
   }
   if(connection_type != 1 && !is_in_list("connection-type", okay_fields))
   {
-    fprintf(stderr, "warning: this service does not support the %s option\n",
+    show_message("warning: this service does not support the %s option\n",
         "connection-type");
   }
 }
@@ -4391,11 +4758,13 @@ int main(int argc, char **argv)
   int sock = -1;
 #endif
 
-#if defined(DEBUG) && defined(__linux__)
-  mcheck(NULL);
+#if defined(DEBUG) && defined(__linux__) && !defined(EMBED)
+  //mcheck(NULL);
 #endif
 
   dprintf((stderr, "staring...\n"));
+
+show_message("ez-ipupdate: starting...\n");
 
   program_name = argv[0];
   options = 0;
@@ -4420,6 +4789,12 @@ int main(int argc, char **argv)
     fprintf(stderr, "ez-ipupdate Version %s\nCopyright (C) 1998-2001 Angus Mackay.\n", VERSION);
   }
 
+#if HAVE_SYSLOG_H
+  if(options & OPT_DAEMON)
+    openlog(program_name, LOG_PID, LOG_USER );
+#endif
+
+
   dprintf((stderr, "options: 0x%04X\n", options));
   dprintf((stderr, "interface: %s\n", interface));
   dprintf((stderr, "ntrys: %d\n", ntrys));
@@ -4434,7 +4809,7 @@ int main(int argc, char **argv)
   {
     if(service->check_info() != 0)
     {
-      fprintf(stderr, "invalid data to perform requested action.\n");
+      show_message("invalid data to perform requested action.\n");
       exit(1);
     }
   }
@@ -4450,6 +4825,12 @@ int main(int argc, char **argv)
 
   *user_name = '\0';
   *password = '\0';
+
+//2007.03.14 Yau add
+#ifdef ASUS_DDNS
+        if (g_asus_ddns_mode == 0)      {
+#endif  // ASUS_DDNS
+
   if(*user != '\0')
   {
     sscanf(user, "%127[^:]:%127[^\n]", user_name, password);
@@ -4458,9 +4839,7 @@ int main(int argc, char **argv)
   }
   if(*user_name == '\0')
   {
-    printf("user name: ");
-    fgets(user_name, sizeof(user_name), stdin);
-    chomp(user_name);
+    get_input("user name", user_name, sizeof(user_name));
   }
   if(*password == '\0')
   {
@@ -4469,6 +4848,11 @@ int main(int argc, char **argv)
   sprintf(user, "%s:%s", user_name, password);
 
   base64Encode(user, auth);
+
+//2007.03.14 Yau add
+#ifdef ASUS_DDNS
+        }
+#endif  // ASUS_DDNS
 
   request = strdup(request_over_ride == NULL ? service->default_request : request_over_ride);
   dprintf((stderr, "request: %s\n", request));
@@ -4480,7 +4864,7 @@ int main(int argc, char **argv)
 
   if(service->check_info() != 0)
   {
-    fprintf(stderr, "invalid data to perform requested action.\n");
+    show_message("invalid data to perform requested action.\n");
     exit(1);
   }
 
@@ -4494,6 +4878,27 @@ int main(int argc, char **argv)
   }
 #endif
 
+//2007.03.14 Yau add
+#ifdef ASUS_DDNS
+        if (g_asus_ddns_mode != 0)      {
+                nvram_unset ("ddns_suggest_name");
+                nvram_unset ("ddns_old_name");
+                if (asus_private() == -1) {
+			nvram_set ("ddns_return_code", "connect_fail");
+			nvram_set ("ddns_return_code_chk", "connect_fail");
+                        goto exit_main;
+		}
+        }
+        if (g_asus_ddns_mode == 1)      {
+              retval = asus_reg_domain ();
+show_message("asus_reg_domain retval= %d\n", retval);
+              goto asusddns_update;
+        } else if (g_asus_ddns_mode == 2)       {
+                // override update_entry() method
+                service->update_entry = asus_update_entry;
+        }
+#endif  // ASUS_DDNS
+
   if(options & OPT_DAEMON)
   {
     int local_update_period = update_period;
@@ -4503,8 +4908,8 @@ int main(int argc, char **argv)
 
     if(interface == NULL) 
     { 
-      fprintf(stderr, "invalid data to perform requested action.\n");
-      fprintf(stderr, "you must provide an interface for daemon mode");
+      show_message("invalid data to perform requested action.\n");
+      show_message("you must provide an interface for daemon mode");
       exit(1);
     }
 
@@ -4516,21 +4921,19 @@ int main(int argc, char **argv)
       close(1);
       close(2);
 #  endif
+#  if HAVE_FORK
       if(fork() > 0) { exit(0); } /* parent */
+#  endif
     }
 
 #if HAVE_GETPID
     if(pid_file && pid_file_create(pid_file) != 0)
     {
-      fprintf(stderr, "exiting...\n");
+      show_message("exiting...\n");
       exit(1);
     }
 #endif
 
-#  if HAVE_SYSLOG_H
-    openlog(program_name, LOG_PID, LOG_USER );
-    options |= OPT_QUIET;
-#  endif
     show_message("ez-ipupdate Version %s, Copyright (C) 1998-2001 Angus Mackay.\n", 
         VERSION);
     show_message("%s started for interface %s host %s using server %s and service %s\n",
@@ -4546,7 +4949,7 @@ int main(int argc, char **argv)
       if(read_cache_file(cache_file, &ipdate, &ipstr) == 0)
       {
         dprintf((stderr, "cache date: %ld\n", ipdate));
-        dprintf((stderr, "cache IP: %s\n", ipstr));
+        dprintf((stderr, "cache IP: %s\n", ipstr ?: ""));
 
         if(ipstr && strchr(ipstr, '.'))
         {
@@ -4560,10 +4963,6 @@ int main(int argc, char **argv)
           strftime(timebuf, sizeof(timebuf), "%Y/%m/%d %H:%M", ts);
           show_message("got last update %s on %s from cache file\n", ipstr, timebuf);
         }
-        else
-        {
-          show_message("malformed cache file: %s\n", cache_file);
-        }
         if(ipstr) { free(ipstr); ipstr = NULL; }
       }
       else
@@ -4575,6 +4974,21 @@ int main(int argc, char **argv)
 
     for(;;)
     {
+      if(options & OPT_ONCE)
+      {
+        int f;
+
+        f = open(BLOCK_FILE, O_RDONLY);
+        if(f >= 0)
+        {
+          close(f);
+          show_message("update critically failed on a previous attempt\n");
+          show_message("delete %s if the problem has been corrected\n",
+              BLOCK_FILE);
+          break;
+		}
+	  }
+
 #if HAVE_SIGNAL_H
       /* check for signals */
       if(last_sig != 0)
@@ -4583,7 +4997,6 @@ int main(int argc, char **argv)
         last_sig = 0;
       }
 #endif
-
       if(get_if_addr(sock, interface, &sin2) == 0)
       {
         ifresolve_warned = 0;
@@ -4644,6 +5057,9 @@ int main(int argc, char **argv)
                     cache_file, error_string);
               }
             }
+
+			if(options & OPT_ONCE)
+				break;
           }
           else
           {
@@ -4671,24 +5087,35 @@ int main(int argc, char **argv)
             dprintf((stderr, "updateres: %d\n", updateres));
             if(updateres == UPDATERES_SHUTDOWN)
             {
-              show_message("shuting down updater for %s due to fatal error\n", 
+              show_message("shutting down updater for %s due to fatal error\n", 
                   N_STR(host));
-
+#ifdef SEND_MEAIL_CMD
               if(notify_email && *notify_email != '\0')
               {
                 char buf[1024];
 
                 dprintf((stderr, "sending email to %s\n", notify_email));
-                snprintf(buf, sizeof(buf), "echo \"ez-ipupdate shuting down"
+                snprintf(buf, sizeof(buf), "echo \"ez-ipupdate shutting down"
                     " updater for %s due to fatal error.\" | %s %s", host,
                     SEND_EMAIL_CMD,
                     notify_email);
                 system(buf);
               }
+#endif
+              if(options & OPT_ONCE)
+              {
+                int f;
+
+                f = open(BLOCK_FILE, O_WRONLY|O_CREAT);
+                if(f >= 0)
+                  close(f);
+              }
               break;
             }
           }
         }
+		else if(options & OPT_ONCE)
+			break;
         sleep(local_update_period);
       }
       else
@@ -4711,9 +5138,9 @@ int main(int argc, char **argv)
 #endif
 
 #else
-    fprintf(stderr, "sorry, this mode is only available on platforms that the ");
-    fprintf(stderr, "IP address \ncan be determined. feel free to hack the code");
-    fprintf(stderr, " though.\n");
+    show_message("sorry, this mode is only available on platforms that the ");
+    show_message("IP address \ncan be determined. feel free to hack the code");
+    show_message(" though.\n");
     exit(1);
 #endif
   }
@@ -4729,12 +5156,12 @@ int main(int argc, char **argv)
 
       if(read_cache_file(cache_file, &ipdate, &ipstr) != 0)
       {
-        fprintf(stderr, "error reading cache file \"%s\": %s\n", cache_file, 
+        show_message( "error reading cache file \"%s\": %s\n", cache_file, 
             errno == 0 ? "malformed entry" : strerror(errno));
       }
-      dprintf((stderr, "cache date: %ld\n", ipdate));
-      dprintf((stderr, "cache IP: %s\n", N_STR(ipstr)));
 
+      //show_message("cache date: %ld\n", ipdate);
+      //show_message("cache IP %s\n", N_STR(ipstr));
       // check that the cache file contained something
       if(ipstr != NULL)
       {
@@ -4753,7 +5180,7 @@ int main(int argc, char **argv)
           close(sock);
           snprintf(ipbuf, sizeof(ipbuf), "%s", inet_ntoa(sin.sin_addr));
 #else
-          fprintf(stderr, "interface lookup not enabled at compile time\n");
+          show_message("interface lookup not enabled at compile time\n");
           exit(1);
 #endif
         }
@@ -4765,8 +5192,18 @@ int main(int argc, char **argv)
         // check for a change in the IP
         if(strcmp(ipstr, ipbuf) == 0)
         {
-          dprintf((stderr, "cache IP doesn't need updating\n"));
-          need_update = 0;
+	  if(nvram_match("ddns_server_x", "WWW.ASUS.COM")) { 
+	    if(strcmp(nvram_safe_get("ddns_hostname_x"), nvram_safe_get("ddns_hostname_old")) == 0) {
+              dprintf((stderr, "IP & hostname don't change, no need updating\n"));
+              show_message("IP & hostname don't change, no need updating\n");
+              need_update = 0;
+	    }
+	  }
+	  else {
+            dprintf((stderr, "cache IP doesn't need updating\n"));
+	    show_message("cache IP doesn't need updating\n");
+            need_update = 0;
+	  }
         }
 
         // check the date
@@ -4785,6 +5222,9 @@ int main(int argc, char **argv)
     if(need_update)
     {
       int res;
+
+      nvram_set ("ddns_return_code", "ddns_query");
+      nvram_set ("ddns_return_code_chk", "ddns_query");
 
       if(address == NULL && interface != NULL)
       {
@@ -4807,34 +5247,15 @@ int main(int argc, char **argv)
 
       for(i=0; i<ntrys; i++)
       {
-        if(service->update_entry() == UPDATERES_OK)
-        {
-          retval = 0;
+	retval = service->update_entry();
+        if(retval == UPDATERES_OK)
           break;
-        }
+        
         if(i+1 != ntrys) { sleep(10 + 10*i); }
       }
-      if(retval == 0 && post_update_cmd)
-      {
-        if((res=exec_cmd(post_update_cmd)) != 0)
-        {
-          if(!(options & OPT_QUIET))
-          {
-            if(res == -1)
-            {
-              fprintf(stderr, "error running post update command: %s\n",
-                  error_string);
-            }
-            else
-            {
-              fprintf(stderr, 
-                  "error running post update command, command exit code: %d\n",
-                  res);
-            }
-          }
-        }
-      }
 
+asusddns_update:
+show_message("asusddns_update: %d\n", retval);
       // write cache file
       if(retval == 0 && cache_file)
       {
@@ -4849,13 +5270,15 @@ int main(int argc, char **argv)
           sock = socket(AF_INET, SOCK_STREAM, 0);
           if(get_if_addr(sock, interface, &sin) != 0)
           {
-            exit(1);
+            retval = 1;
+            goto exit_main;
           }
           close(sock);
           snprintf(ipbuf, sizeof(ipbuf), "%s", inet_ntoa(sin.sin_addr));
 #else
-          fprintf(stderr, "interface lookup not enabled at compile time\n");
-          exit(1);
+          show_message("interface lookup not enabled at compile time\n");
+          retval = 1;
+          goto exit_main;
 #endif
         }
         else
@@ -4865,17 +5288,54 @@ int main(int argc, char **argv)
 
         if(write_cache_file(cache_file, time(NULL), ipbuf) != 0)
         {
-          fprintf(stderr, "unable to write cache file \"%s\": %s\n",
+          show_message("unable to write cache file \"%s\": %s\n",
               cache_file, error_string);
-          exit(1);
+          retval = 1;
+          goto exit_main;
         }
+      }
+      if(retval == 0 && post_update_cmd)
+      {
+        if((res=exec_cmd(post_update_cmd)) != 0)
+        {
+          if(!(options & OPT_QUIET))
+          {
+            if(res == -1)
+            {
+              show_message("error running post update command: %s\n",
+                  error_string);
+            }
+            else
+            {
+              show_message(
+                  "error running post update command, command exit code: %d\n",
+                  res);
+            }
+          }
+        }
+      }
+      if(!nvram_match("ddns_server_x", "WWW.ASUS.COM")) {
+	if(retval == 0){
+          nvram_set("ddns_return_code", "200");
+          nvram_set("ddns_return_code_chk", "200");
+        }
+	else if(retval == 3) {
+	  nvram_set("ddns_return_code", "auth_fail");
+	  nvram_set("ddns_return_code_chk", "auth_fail");
+	}
+	else {
+          nvram_set("ddns_return_code", "unknown_error");
+          nvram_set("ddns_return_code_chk", "unknown_error");
+	}
       }
     }
     else
     {
-      fprintf(stderr, "no update needed at this time\n");
+      show_message("no update needed at this time\n");
     }
   }
+
+  exit_main:
 
 #ifdef IF_LOOKUP
   if(sock > 0) { close(sock); }

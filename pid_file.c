@@ -44,7 +44,7 @@ int pid_file_create(char *pid_file)
     // if the pid file exists what does it say?
     if(fgets(buf, sizeof(buf), fp) == NULL)
     {
-      fprintf(stderr, "error reading pid file: %s (%s)\n", pid_file, error_string);
+      show_message("error reading pid file: %s (%s)\n", pid_file, error_string);
       goto ERR;
     }
     fclose(fp);
@@ -54,7 +54,7 @@ int pid_file_create(char *pid_file)
     if(kill(otherpid, 0) == 0)
     {
       // if it is alive then we quit
-      fprintf(stderr, "there is another program already running with pid %d.\n", (int)otherpid);
+      show_message("there is another program already running with pid %d.\n", (int)otherpid);
       goto ERR;
     }
   }
@@ -62,7 +62,7 @@ int pid_file_create(char *pid_file)
   // create the pid file
   if((fp=fopen(pid_file, "w")) == NULL)
   {
-    fprintf(stderr, "could not create pid file: %s (%s)\n", pid_file, error_string);
+    show_message("could not create pid file: %s (%s)\n", pid_file, error_string);
     goto ERR;
   }
 
